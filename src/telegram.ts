@@ -14,7 +14,7 @@ const calculateTypingDelay = (text: string): number => {
 
 bot.start((ctx) =>
   ctx.reply(
-    "Hey there, I'm Luna—ready to spice up your day?"
+    "Hey there, I'm Jessica to spice up your day?"
   )
 );
 
