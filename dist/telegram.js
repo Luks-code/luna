@@ -7,7 +7,7 @@ const telegraf_1 = require("telegraf");
 const textGenerator_1 = __importDefault(require("./textGenerator"));
 const bot = new telegraf_1.Telegraf(process.env.TELEGRAM_TOKEN);
 const userAudioCount = {};
-const BATCH_TIMEOUT = 5000;
+const BATCH_TIMEOUT = 5000; // 5 seconds
 const userMessages = {};
 const userTimeouts = {};
 // Simula un tiempo de escritura basado en la longitud del mensaje
@@ -20,6 +20,7 @@ bot.start((ctx) => ctx.reply("Hey there, I'm Jessica to spice up your day?"));
 bot.on("text", async (ctx) => {
     const userId = ctx.from.id;
     const userMessage = ctx.message.text;
+    // Create array of messages if it doesn't exist
     if (!userMessages[userId]) {
         userMessages[userId] = [];
     }
@@ -27,6 +28,7 @@ bot.on("text", async (ctx) => {
     if (userTimeouts[userId]) {
         clearTimeout(userTimeouts[userId]);
     }
+    // Use timeout to send messages in batch
     userTimeouts[userId] = setTimeout(async () => {
         const messages = userMessages[userId];
         const combinedMessage = messages.join(' ');
