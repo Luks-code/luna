@@ -7,32 +7,49 @@ const telegraf_1 = require("telegraf");
 const textGenerator_1 = __importDefault(require("./textGenerator"));
 const bot = new telegraf_1.Telegraf(process.env.TELEGRAM_TOKEN);
 const userAudioCount = {};
+const BATCH_TIMEOUT = 5000;
+const userMessages = {};
+const userTimeouts = {};
 // Simula un tiempo de escritura basado en la longitud del mensaje
 const calculateTypingDelay = (text) => {
     const words = text.split(" ").length;
     const baseTimePerWord = 300; // Tiempo base en ms por palabra
     return Math.min(5000, words * baseTimePerWord); // Máximo 5 segundos
 };
-bot.start((ctx) => ctx.reply("Hey there, I'm Luna—ready to spice up your day?"));
+bot.start((ctx) => ctx.reply("Hey there, I'm Jessica to spice up your day?"));
 bot.on("text", async (ctx) => {
+    const userId = ctx.from.id;
     const userMessage = ctx.message.text;
-    // Reset audio count if user writes text
-    if (userAudioCount[ctx.from.id]) {
-        userAudioCount[ctx.from.id] = 0;
+    if (!userMessages[userId]) {
+        userMessages[userId] = [];
     }
-    try {
-        ctx.telegram.sendChatAction(ctx.chat.id, "typing");
-        const response = await (0, textGenerator_1.default)(userMessage);
-        // Calcula el tiempo de escritura según la longitud del mensaje de respuesta
-        const typingDelay = calculateTypingDelay(response);
-        await new Promise((resolve) => setTimeout(resolve, typingDelay));
-        ctx.reply(response);
+    userMessages[userId].push(userMessage);
+    if (userTimeouts[userId]) {
+        clearTimeout(userTimeouts[userId]);
     }
-    catch (error) {
-        ctx.telegram.sendChatAction(ctx.chat.id, "typing");
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        ctx.reply("Oops, something got tangled. Let’s chat a bit later, honey!");
-    }
+    userTimeouts[userId] = setTimeout(async () => {
+        const messages = userMessages[userId];
+        const combinedMessage = messages.join(' ');
+        // Reset audio count if user writes text
+        if (userAudioCount[userId]) {
+            userAudioCount[userId] = 0;
+        }
+        try {
+            ctx.telegram.sendChatAction(ctx.chat.id, "typing");
+            const response = await (0, textGenerator_1.default)(combinedMessage);
+            // Calcula el tiempo de escritura según la longitud del mensaje de respuesta
+            const typingDelay = calculateTypingDelay(response);
+            await new Promise((resolve) => setTimeout(resolve, typingDelay));
+            ctx.reply(response);
+        }
+        catch (error) {
+            ctx.telegram.sendChatAction(ctx.chat.id, "typing");
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            ctx.reply("Oops, something got tangled. Let's chat a bit later, honey!");
+        }
+        userMessages[userId] = [];
+        userTimeouts[userId] = null;
+    }, BATCH_TIMEOUT);
 });
 bot.on("voice", async (ctx) => {
     const userId = ctx.from.id;

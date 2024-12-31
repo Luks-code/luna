@@ -8,7 +8,7 @@ const app = express();
 const PORT = 3000;
 
 app.get("/", (req: Request, res: Response) => {
-  res.send("Luna is running 🚀");
+  res.send("Jessica is running 🚀");
 });
 
 app.listen(PORT, () => {
@@ -16,4 +16,4 @@ app.listen(PORT, () => {
 });
 
 // Iniciar el bot de Telegram
-telegram.launch().then(() => console.log("CachitoBot está vivo en Telegram"));
+telegram.launch().then(() => console.log("Jessica está vivo en Telegram"));
