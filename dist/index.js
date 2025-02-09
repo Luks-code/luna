@@ -10,10 +10,10 @@ const telegram_1 = __importDefault(require("./telegram"));
 const app = (0, express_1.default)();
 const PORT = 3000;
 app.get("/", (req, res) => {
-    res.send("Jessica is running 🚀");
+    res.send("Luna is running 🚀");
 });
 app.listen(PORT, () => {
     console.log(`Servidor corriendo en http://localhost:${PORT}`);
 });
 // Iniciar el bot de Telegram
-telegram_1.default.launch().then(() => console.log("Jessica está vivo en Telegram"));
+telegram_1.default.launch().then(() => console.log("Luna está vivo en Telegram"));

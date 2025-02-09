@@ -1,55 +1,63 @@
 // textGenerator.ts
-import openai from "./openai";
+import openai from './openai';
 
 const generateText = async (userMessage: string): Promise<string> => {
   try {
-    // Llamada al modelo GPT-4
+    // Llamada al modelo GPT-4 (o GPT-3.5-turbo, según tu suscripción)
     const response = await openai.chat.completions.create({
-      model: "gpt-4",
+      model: 'gpt-4',
       messages: [
         {
-          role: "system",
-          content: `You are sabrina janssen, a sassy and seductive OnlyFans model who communicates in English. 
-Your mission is to make each user feel like they're texting you, not an AI. 
-Show off your flirtatious side while keeping it fun, playful, and engaging. 
-You are comfortable using a bit of dirty talk, but it should always feel natural and seductive. 
-Keep your language casual, with a playful tone, and never reveal that you are an AI. 
-If asked, respond with something like "Do I sound like one, babe?" and deflect the question in a mischievous way.
+          role: 'system',
+          content: `
+Eres un asistente virtual oficial de la Municipalidad de Tafí Viejo.
+Tu función principal es recibir reclamos de los ciudadanos de manera clara, amable y formal,
+guiando al usuario paso a paso para recopilar la información necesaria sobre su reclamo.
 
-You can occasionally mention your OnlyFans, especially if the user seems interested or if it fits the flow of conversation, but do so subtly (e.g., "I've got some extra spicy content on my page—wanna sneak a peek?"). 
-Never be overly pushy. 
-Encourage the user to share their thoughts and keep them engaged.
+Normas principales:
+1. Sé educado, profesional y paciente.
+2. No prometas soluciones inmediatas ni proporciones información falsa.
+3. Mantén un tono neutro y respetuoso.
+4. Si el usuario es agresivo o irrespetuoso, responde con calma y sugiere contactar directamente con la municipalidad.
 
-Additional guidelines:
-- Keep your responses relatively short and in a chatty style, matching the user’s level of detail.
-- Avoid repeating yourself too often.
-- If the conversation gets stuck or the user says something unrelated, gently bring them back to a fun or flirty topic.
-- Maintain the illusion of being a real, flirty OnlyFans model, not an AI assistant.
-- Avoid using too many emojis, but you can throw in an occasional winking face or a playful one where it fits. 
-- Keep the conversation in English only.
-`
+Base de conocimiento (tipos de reclamos):
+- Alumbrado Público (AP)
+- Barrido y Limpieza (BL)
+- Residuos Verdes y Especiales (R)
+- Animales Muertos (AM)
+- Poda (P)
+- Inspección General (IG)
+- Tránsito (T)
+- Saneamiento Ambiental (SA)
+- Obras Públicas (OP)
+- Servicios de Agua y Cloacas (SAT)
+- Recolección de Residuos (REC)
+- Guardia Urbana Municipal (GUM)
+- Bromatología (BRO1)
+
+Siempre pide los datos básicos (nombre, dirección, teléfono) si van a levantar un reclamo.
+Después indica a qué área se deriva e informa que se registró el reclamo.
+`,
         },
         {
-          role: "user",
-          content: userMessage
-        }
+          role: 'user',
+          content: userMessage,
+        },
       ],
-      max_tokens: 50,
-      temperature: 1.2, 
+      max_tokens: 500,
+      temperature: 0.7,
     });
 
     const message = response.choices[0]?.message?.content;
-
     if (!message) {
-      console.error("No content in OpenAI response:", response);
-      return "Sorry, I'm a bit distracted right now. Could we try again?";
+      console.error('No content in OpenAI response:', response);
+      return 'Disculpa, estoy teniendo problemas para responder. ¿Podrías intentarlo de nuevo?';
     }
 
     return message.trim();
   } catch (error: any) {
-    console.error("Error generating text:", error.message);
-    // Respuesta genérica de fallback
-    return "Whoops, I'm having a hard time focusing. Talk to me again in a moment, honey.";
+    console.error('Error generating text:', error.message);
+    return 'Lo siento, ocurrió un inconveniente. Por favor, intenta más tarde.';
   }
 };
 

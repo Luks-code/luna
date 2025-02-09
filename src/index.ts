@@ -1,19 +1,26 @@
-import dotenv from "dotenv";
+// index.ts
+import dotenv from 'dotenv';
 dotenv.config();
 
-import express, { Request, Response } from "express";
-import telegram from './telegram'
+import express, { Request, Response } from 'express';
+import bodyParser from 'body-parser';
+import { setupWhatsAppWebhook } from './whatsapp';
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
-app.get("/", (req: Request, res: Response) => {
-  res.send("Jessica is running 🚀");
+// Para que Express pueda parsear JSON en el body de las peticiones
+app.use(bodyParser.json());
+
+// Ruta simple de prueba
+app.get('/', (req: Request, res: Response) => {
+  res.send('Bot Municipal de Tafí Viejo corriendo 🚀');
 });
 
+// Configuramos las rutas para el Webhook de WhatsApp
+setupWhatsAppWebhook(app);
+
+// Iniciamos el servidor
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en http://localhost:${PORT}`);
 });
-
-// Iniciar el bot de Telegram
-telegram.launch().then(() => console.log("Jessica está vivo en Telegram"));

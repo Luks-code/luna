@@ -16,7 +16,7 @@ const calculateTypingDelay = (text) => {
     const baseTimePerWord = 300; // Tiempo base en ms por palabra
     return Math.min(5000, words * baseTimePerWord); // Máximo 5 segundos
 };
-bot.start((ctx) => ctx.reply("Hey there, I'm Jessica to spice up your day?"));
+bot.start((ctx) => ctx.reply("Hey there, I'm Luna to spice up your day?"));
 bot.on("text", async (ctx) => {
     const userId = ctx.from.id;
     const userMessage = ctx.message.text;

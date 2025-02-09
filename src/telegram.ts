@@ -5,7 +5,7 @@ const bot = new Telegraf(process.env.TELEGRAM_TOKEN!);
 
 const userAudioCount: Record<number, number> = {};
 
-const BATCH_TIMEOUT = 5000; // 5 seconds
+const BATCH_TIMEOUT = 1500; // 5 seconds
 const userMessages: Record<number, string[]> = {};
 const userTimeouts: Record<number, NodeJS.Timeout | null> = {};
 
@@ -19,7 +19,7 @@ const calculateTypingDelay = (text: string): number => {
 
 bot.start((ctx) =>
   ctx.reply(
-    "Hey there, I'm Jessica to spice up your day?"
+    "Hey there! What are you looking for?"
   )
 );
 
