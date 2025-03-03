@@ -2,6 +2,8 @@
 import { Express, Request, Response } from 'express';
 import axios from 'axios';
 import generateText from './textGenerator';
+import { prisma, findOrCreateCitizen, createComplaint } from './prisma';
+import { GPTResponse, ConversationState } from './types';
 
 /**
  * setupWhatsAppWebhook
@@ -27,39 +29,77 @@ export function setupWhatsAppWebhook(app: Express) {
 
   // 2) Recepción de mensajes (POST)
   app.post('/webhook', async (req: Request, res: Response) => {
-    // Aseguramos responder 200 rápido a Meta para no generar errores
-    // y luego procesar la lógica.
     res.sendStatus(200);
 
     const body = req.body;
 
-    // Verificamos que el evento venga con la estructura esperada
     if (body.object && body.entry && body.entry[0].changes && body.entry[0].changes[0]) {
       const changes = body.entry[0].changes[0];
       const value = changes.value;
       const messages = value.messages;
 
-      // Chequeamos si hay mensajes
       if (messages && messages.length > 0) {
         const msg = messages[0];
-        const from = msg.from; // Número del usuario que envía el mensaje
+        const from = msg.from;
         const textType = msg.type;
 
-        // Si el mensaje es de tipo texto
         if (textType === 'text') {
-          const userText = msg.text.body; // Texto que envía el ciudadano
+          const userText = msg.text.body;
 
           try {
-            // Generamos la respuesta con OpenAI (o la lógica que desees)
-            const responseText = await generateText(userText);
+            // Generamos la respuesta con OpenAI
+            const response = await generateText(userText, from);
 
-            // Respondemos al usuario
-            await sendWhatsAppMessage(from, responseText);
+            // Enviamos la respuesta al usuario
+            await sendWhatsAppMessage(from, response.message);
+
+            // Si es un reclamo completo, lo guardamos en la base de datos
+            if (response.isComplaint && 
+                response.data?.citizenData?.name &&
+                response.data?.citizenData?.documentId &&
+                response.data?.citizenData?.address &&
+                response.data?.type &&
+                response.data?.description &&
+                response.data?.location) {
+              
+              try {
+                // Crear o actualizar ciudadano
+                const citizen = await findOrCreateCitizen({
+                  name: response.data.citizenData.name,
+                  documentId: response.data.citizenData.documentId,
+                  phone: from,
+                  address: response.data.citizenData.address
+                });
+
+                // Crear el reclamo
+                const complaint = await createComplaint({
+                  type: response.data.type,
+                  description: response.data.description,
+                  location: response.data.location,
+                  citizenId: citizen.id
+                });
+
+                // Enviar confirmación al usuario
+                await sendWhatsAppMessage(
+                  from,
+                  `✅ Reclamo registrado exitosamente!\nNúmero de reclamo: #${complaint.id}\nTipo: ${complaint.type}\nEstado: Pendiente de revisión`
+                );
+              } catch (dbError) {
+                console.error('Error saving to database:', dbError);
+                await sendWhatsAppMessage(
+                  from,
+                  'Lo siento, hubo un problema al guardar tu reclamo. Por favor, intenta nuevamente.'
+                );
+              }
+            }
           } catch (error) {
             console.error('Error al generar/responder mensaje:', error);
+            await sendWhatsAppMessage(
+              from,
+              'Lo siento, ocurrió un error inesperado. Por favor, intenta más tarde.'
+            );
           }
         } else {
-          // En caso de que no sea texto (ej. audio, imagen), podrías manejarlo distinto:
           await sendWhatsAppMessage(
             msg.from,
             'Lo siento, en este momento solo puedo procesar mensajes de texto. ¿Podrías escribir tu mensaje, por favor?'

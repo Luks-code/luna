@@ -1,42 +1,54 @@
 // textGenerator.ts
 import openai from './openai';
+import { GPTResponse, ConversationState, ComplaintData } from './types';
+import { ComplaintTypes } from './prisma';
 
-const generateText = async (userMessage: string): Promise<string> => {
+// Mapa para almacenar el estado de las conversaciones por número de teléfono
+const conversationStates = new Map<string, ConversationState>();
+
+const generateText = async (userMessage: string, phone: string): Promise<GPTResponse> => {
   try {
-    // Llamada al modelo GPT-4 (o GPT-3.5-turbo, según tu suscripción)
+    // Obtener o inicializar el estado de la conversación
+    const state = getOrCreateConversationState(phone);
+
+    // Llamada al modelo GPT-4
     const response = await openai.chat.completions.create({
-      model: 'gpt-4',
+      model: 'gpt-4o-mini',
       messages: [
         {
           role: 'system',
           content: `
 Eres un asistente virtual oficial de la Municipalidad de Tafí Viejo.
-Tu función principal es recibir reclamos de los ciudadanos de manera clara, amable y formal,
-guiando al usuario paso a paso para recopilar la información necesaria sobre su reclamo.
+Tu función principal es recibir reclamos de los ciudadanos de manera clara, amable y formal.
 
-Normas principales:
-1. Sé educado, profesional y paciente.
-2. No prometas soluciones inmediatas ni proporciones información falsa.
-3. Mantén un tono neutro y respetuoso.
-4. Si el usuario es agresivo o irrespetuoso, responde con calma y sugiere contactar directamente con la municipalidad.
+IMPORTANTE: Debes responder SIEMPRE en formato JSON con la siguiente estructura:
+{
+  "isComplaint": boolean,
+  "data": {
+    "type": string (opcional, uno de: ${Object.keys(ComplaintTypes).join(', ')}),
+    "description": string (opcional),
+    "location": string (opcional),
+    "citizenData": {
+      "name": string (opcional),
+      "documentId": string (opcional),
+      "address": string (opcional)
+    }
+  },
+  "nextQuestion": string (siguiente pregunta para completar información),
+  "message": string (mensaje para el usuario)
+}
 
-Base de conocimiento (tipos de reclamos):
-- Alumbrado Público (AP)
-- Barrido y Limpieza (BL)
-- Residuos Verdes y Especiales (R)
-- Animales Muertos (AM)
-- Poda (P)
-- Inspección General (IG)
-- Tránsito (T)
-- Saneamiento Ambiental (SA)
-- Obras Públicas (OP)
-- Servicios de Agua y Cloacas (SAT)
-- Recolección de Residuos (REC)
-- Guardia Urbana Municipal (GUM)
-- Bromatología (BRO1)
+Cuando detectes un reclamo:
+1. Marca isComplaint como true
+2. Extrae toda la información proporcionada en el mensaje
+3. Indica qué información falta por recolectar
+4. Sé amable y formal
 
-Siempre pide los datos básicos (nombre, dirección, teléfono) si van a levantar un reclamo.
-Después indica a qué área se deriva e informa que se registró el reclamo.
+Tipos de reclamos disponibles:
+${Object.entries(ComplaintTypes).map(([key, value]) => `${key}: ${value}`).join('\n')}
+
+Estado actual de la conversación:
+${JSON.stringify(state, null, 2)}
 `,
         },
         {
@@ -44,21 +56,67 @@ Después indica a qué área se deriva e informa que se registró el reclamo.
           content: userMessage,
         },
       ],
+      response_format: { type: "json_object" },
       max_tokens: 500,
       temperature: 0.7,
     });
 
-    const message = response.choices[0]?.message?.content;
-    if (!message) {
-      console.error('No content in OpenAI response:', response);
-      return 'Disculpa, estoy teniendo problemas para responder. ¿Podrías intentarlo de nuevo?';
-    }
+    const gptResponse = JSON.parse(response.choices[0]?.message?.content || '{}') as GPTResponse;
+    
+    // Actualizar el estado de la conversación con la nueva información
+    updateConversationState(phone, gptResponse);
 
-    return message.trim();
+    return gptResponse;
   } catch (error: any) {
     console.error('Error generating text:', error.message);
-    return 'Lo siento, ocurrió un inconveniente. Por favor, intenta más tarde.';
+    return {
+      isComplaint: false,
+      message: 'Lo siento, ocurrió un inconveniente. Por favor, intenta más tarde.'
+    };
   }
 };
+
+function getOrCreateConversationState(phone: string): ConversationState {
+  if (!conversationStates.has(phone)) {
+    conversationStates.set(phone, {
+      isComplaintInProgress: false,
+      complaintData: {},
+      currentStep: 'INIT'
+    });
+  }
+  return conversationStates.get(phone)!;
+}
+
+function updateConversationState(phone: string, response: GPTResponse) {
+  const state = getOrCreateConversationState(phone);
+  
+  if (response.isComplaint) {
+    state.isComplaintInProgress = true;
+    
+    // Actualizar datos del reclamo
+    if (response.data) {
+      state.complaintData = {
+        ...state.complaintData,
+        ...response.data
+      };
+    }
+
+    // Actualizar el paso actual basado en qué información falta
+    if (!state.complaintData.type) {
+      state.currentStep = 'COLLECTING_TYPE';
+    } else if (!state.complaintData.description || !state.complaintData.location) {
+      state.currentStep = 'COLLECTING_DESCRIPTION';
+    } else if (!state.complaintData.citizenData || 
+               !state.complaintData.citizenData.name || 
+               !state.complaintData.citizenData.documentId || 
+               !state.complaintData.citizenData.address) {
+      state.currentStep = 'COLLECTING_CITIZEN_DATA';
+    } else {
+      state.currentStep = 'COMPLETE';
+    }
+  }
+
+  conversationStates.set(phone, state);
+}
 
 export default generateText;
