@@ -1,7 +1,7 @@
 // whatsapp.ts
 import { Express, Request, Response } from 'express';
 import axios from 'axios';
-import generateText from './textGenerator';
+import { generateText } from './textGenerator';
 import { prisma, findOrCreateCitizen, createComplaint } from './prisma';
 import { getConversationState, setConversationState, initialConversationState } from './redis';
 import { handleCommand } from './commands';
@@ -117,7 +117,7 @@ export function setupWhatsAppWebhook(app: Express) {
       }
 
       // Generar respuesta con OpenAI
-      const response = await generateText(userText, from, conversationState);
+      const response = await generateText(userText, conversationState);
       await sendWhatsAppMessage(from, response.message);
 
       // Actualizar estado de la conversación
@@ -137,8 +137,7 @@ export function setupWhatsAppWebhook(app: Express) {
 - Nombre: ${conversationState.complaintData.citizenData?.name}
 - DNI: ${conversationState.complaintData.citizenData?.documentId}
 - Dirección: ${conversationState.complaintData.citizenData?.address}
-
-Responde "CONFIRMAR" para guardar el reclamo o "CANCELAR" para descartar.`;
+`;
 
           conversationState.awaitingConfirmation = true;
           await setConversationState(from, conversationState);

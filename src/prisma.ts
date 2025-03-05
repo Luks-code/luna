@@ -26,7 +26,8 @@ export const ComplaintTypes = {
   SAT: 'Servicios de Agua y Cloacas',
   REC: 'Recolección de Residuos',
   GUM: 'Guardia Urbana Municipal',
-  BRO1: 'Bromatología'
+  BRO1: 'Bromatología',
+  OTRO: 'Otros'
 } as const;
 
 // Funciones helper para la base de datos
