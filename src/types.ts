@@ -26,5 +26,28 @@ export interface CitizenData {
 export interface ConversationState {
   isComplaintInProgress: boolean;
   complaintData: ComplaintData;
-  currentStep: 'INIT' | 'COLLECTING_TYPE' | 'COLLECTING_DESCRIPTION' | 'COLLECTING_CITIZEN_DATA' | 'COMPLETE';
+  currentStep: 'INIT' | 'COLLECTING_TYPE' | 'COLLECTING_DESCRIPTION' | 'COLLECTING_CITIZEN_DATA' | 'AWAITING_CONFIRMATION' | 'COMPLETE';
+  awaitingConfirmation?: boolean;
+  confirmedData?: ComplaintData;
+}
+
+// Comandos disponibles
+export const COMMANDS = {
+  CANCELAR: 'CANCELAR',
+  AYUDA: 'AYUDA',
+  ESTADO: 'ESTADO',
+  REINICIAR: 'REINICIAR',
+  CONFIRMAR: 'CONFIRMAR',
+  MISRECLAMOS: 'MISRECLAMOS',
+  RECLAMO: 'RECLAMO'
+} as const;
+
+export type Command = typeof COMMANDS[keyof typeof COMMANDS];
+
+// Estado del reclamo
+export enum ComplaintStatus {
+  PENDIENTE = 'PENDIENTE',
+  EN_PROCESO = 'EN_PROCESO',
+  RESUELTO = 'RESUELTO',
+  CANCELADO = 'CANCELADO'
 }

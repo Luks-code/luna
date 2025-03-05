@@ -3,15 +3,47 @@ import { Express, Request, Response } from 'express';
 import axios from 'axios';
 import generateText from './textGenerator';
 import { prisma, findOrCreateCitizen, createComplaint } from './prisma';
-import { GPTResponse, ConversationState } from './types';
+import { getConversationState, setConversationState, initialConversationState } from './redis';
+import { handleCommand } from './commands';
 
-/**
- * setupWhatsAppWebhook
- *
- * Configura las rutas de webhook para la API de WhatsApp
- */
+export async function sendWhatsAppMessage(to: string, message: string) {
+  const token = process.env.WHATSAPP_TOKEN;
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+
+  const url = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
+
+  try {
+    await axios.post(
+      url,
+      {
+        messaging_product: 'whatsapp',
+        to,
+        text: { body: message },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+  } catch (error) {
+    console.error('Error al enviar mensaje de WhatsApp:', error);
+  }
+}
+
+function isReadyToSave(data?: any): boolean {
+  return !!(
+    data?.type &&
+    data?.description &&
+    data?.location &&
+    data?.citizenData?.name &&
+    data?.citizenData?.documentId &&
+    data?.citizenData?.address
+  );
+}
+
 export function setupWhatsAppWebhook(app: Express) {
-  // 1) Verificación del Webhook (GET)
   app.get('/webhook', (req: Request, res: Response) => {
     const verifyToken = process.env.VERIFY_TOKEN;
     const mode = req.query['hub.mode'];
@@ -27,116 +59,131 @@ export function setupWhatsAppWebhook(app: Express) {
     }
   });
 
-  // 2) Recepción de mensajes (POST)
   app.post('/webhook', async (req: Request, res: Response) => {
     res.sendStatus(200);
 
     const body = req.body;
+    if (!body.object || !body.entry?.[0]?.changes?.[0]) return;
 
-    if (body.object && body.entry && body.entry[0].changes && body.entry[0].changes[0]) {
-      const changes = body.entry[0].changes[0];
-      const value = changes.value;
-      const messages = value.messages;
+    const changes = body.entry[0].changes[0];
+    const messages = changes.value?.messages;
 
-      if (messages && messages.length > 0) {
-        const msg = messages[0];
-        const from = msg.from;
-        const textType = msg.type;
+    if (!messages?.[0]) return;
 
-        if (textType === 'text') {
-          const userText = msg.text.body;
+    const msg = messages[0];
+    const from = msg.from;
+    const textType = msg.type;
 
-          try {
-            // Generamos la respuesta con OpenAI
-            const response = await generateText(userText, from);
+    if (textType !== 'text') {
+      await sendWhatsAppMessage(
+        from,
+        'Lo siento, en este momento solo puedo procesar mensajes de texto. ¿Podrías escribir tu mensaje, por favor?'
+      );
+      return;
+    }
 
-            // Enviamos la respuesta al usuario
-            await sendWhatsAppMessage(from, response.message);
+    const userText = msg.text.body.trim();
 
-            // Si es un reclamo completo, lo guardamos en la base de datos
-            if (response.isComplaint && 
-                response.data?.citizenData?.name &&
-                response.data?.citizenData?.documentId &&
-                response.data?.citizenData?.address &&
-                response.data?.type &&
-                response.data?.description &&
-                response.data?.location) {
-              
-              try {
-                // Crear o actualizar ciudadano
-                const citizen = await findOrCreateCitizen({
-                  name: response.data.citizenData.name,
-                  documentId: response.data.citizenData.documentId,
-                  phone: from,
-                  address: response.data.citizenData.address
-                });
+    try {
+      // Obtener el estado actual
+      let conversationState = await getConversationState(from);
+      if (!conversationState) {
+        conversationState = initialConversationState;
+      }
 
-                // Crear el reclamo
-                const complaint = await createComplaint({
-                  type: response.data.type,
-                  description: response.data.description,
-                  location: response.data.location,
-                  citizenId: citizen.id
-                });
+      // Manejar comandos especiales
+      if (userText.startsWith('/')) {
+        await handleCommand(userText.substring(1), from, conversationState);
+        return;
+      }
 
-                // Enviar confirmación al usuario
-                await sendWhatsAppMessage(
-                  from,
-                  `✅ Reclamo registrado exitosamente!\nNúmero de reclamo: #${complaint.id}\nTipo: ${complaint.type}\nEstado: Pendiente de revisión`
-                );
-              } catch (dbError) {
-                console.error('Error saving to database:', dbError);
-                await sendWhatsAppMessage(
-                  from,
-                  'Lo siento, hubo un problema al guardar tu reclamo. Por favor, intenta nuevamente.'
-                );
-              }
-            }
-          } catch (error) {
-            console.error('Error al generar/responder mensaje:', error);
-            await sendWhatsAppMessage(
-              from,
-              'Lo siento, ocurrió un error inesperado. Por favor, intenta más tarde.'
-            );
-          }
+      // Manejar confirmación si está pendiente
+      if (conversationState.awaitingConfirmation) {
+        const upperText = userText.toUpperCase();
+        if (upperText === 'CONFIRMAR') {
+          await saveComplaint(from, conversationState.complaintData);
+          return;
+        } else if (upperText === 'CANCELAR') {
+          await setConversationState(from, initialConversationState);
+          await sendWhatsAppMessage(from, 'Reclamo cancelado. ¿Puedo ayudarte en algo más?');
+          return;
         } else {
           await sendWhatsAppMessage(
-            msg.from,
-            'Lo siento, en este momento solo puedo procesar mensajes de texto. ¿Podrías escribir tu mensaje, por favor?'
+            from,
+            'Por favor, responde "CONFIRMAR" para guardar el reclamo o "CANCELAR" para descartarlo.'
           );
+          return;
         }
       }
+
+      // Generar respuesta con OpenAI
+      const response = await generateText(userText, from, conversationState);
+      await sendWhatsAppMessage(from, response.message);
+
+      // Actualizar estado de la conversación
+      if (response.isComplaint) {
+        conversationState.isComplaintInProgress = true;
+        conversationState.complaintData = {
+          ...conversationState.complaintData,
+          ...response.data
+        };
+
+        // Si tenemos todos los datos, pedir confirmación
+        if (isReadyToSave(conversationState.complaintData)) {
+          const confirmationMessage = `Por favor, confirma que los siguientes datos son correctos:
+- Tipo: ${conversationState.complaintData.type}
+- Descripción: ${conversationState.complaintData.description}
+- Ubicación: ${conversationState.complaintData.location}
+- Nombre: ${conversationState.complaintData.citizenData?.name}
+- DNI: ${conversationState.complaintData.citizenData?.documentId}
+- Dirección: ${conversationState.complaintData.citizenData?.address}
+
+Responde "CONFIRMAR" para guardar el reclamo o "CANCELAR" para descartar.`;
+
+          conversationState.awaitingConfirmation = true;
+          await setConversationState(from, conversationState);
+          await sendWhatsAppMessage(from, confirmationMessage);
+          return;
+        }
+      }
+
+      await setConversationState(from, conversationState);
+    } catch (error) {
+      console.error('Error al procesar mensaje:', error);
+      await sendWhatsAppMessage(
+        from,
+        'Lo siento, ocurrió un error inesperado. Por favor, intenta más tarde.'
+      );
     }
   });
 }
 
-/**
- * Envía un mensaje de texto a través de la API de WhatsApp (Cloud API).
- */
-async function sendWhatsAppMessage(to: string, message: string) {
-  const token = process.env.WHATSAPP_TOKEN;
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-
-  const url = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
-
+async function saveComplaint(from: string, complaintData: any) {
   try {
-    await axios.post(
-      url,
-      {
-        messaging_product: 'whatsapp',
-        to,
-        text: {
-          body: message,
-        },
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      }
+    const citizen = await findOrCreateCitizen({
+      name: complaintData.citizenData.name,
+      documentId: complaintData.citizenData.documentId,
+      phone: from,
+      address: complaintData.citizenData.address
+    });
+
+    const complaint = await createComplaint({
+      type: complaintData.type,
+      description: complaintData.description,
+      location: complaintData.location,
+      citizenId: citizen.id
+    });
+
+    await setConversationState(from, initialConversationState);
+    await sendWhatsAppMessage(
+      from,
+      `✅ Reclamo registrado exitosamente!\nNúmero de reclamo: #${complaint.id}\nTipo: ${complaint.type}\nEstado: Pendiente de revisión`
     );
   } catch (error) {
-    console.error('Error al enviar mensaje de WhatsApp:', error);
+    console.error('Error saving complaint:', error);
+    await sendWhatsAppMessage(
+      from,
+      'Lo siento, hubo un problema al guardar tu reclamo. Por favor, intenta nuevamente.'
+    );
   }
 }

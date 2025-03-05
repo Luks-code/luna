@@ -1,5 +1,5 @@
-// This is your Prisma schema file
-// Learn more about it in the docs: https://pris.ly/d/prisma-schema
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
   provider = "prisma-client-js"
@@ -17,12 +17,19 @@ model Citizen {
   documentId  String     @unique // Número de documento
   phone       String     @unique // Número de WhatsApp
   address     String
+  complaints  Complaint[] // Relación con los reclamos
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
-  complaints  Complaint[] // Relación con los reclamos
 
   @@index([phone])
   @@index([documentId])
+}
+
+enum ComplaintStatus {
+  PENDIENTE
+  EN_PROCESO
+  RESUELTO
+  CANCELADO
 }
 
 // Modelo para los reclamos
@@ -30,24 +37,14 @@ model Complaint {
   id          Int       @id @default(autoincrement())
   type        String    // Tipo de reclamo (AP, BL, R, etc.)
   description String    @db.Text
-  status      Status    @default(PENDING)
+  location    String    // Ubicación específica del reclamo
+  status      ComplaintStatus @default(PENDIENTE) // Estado del reclamo
   citizenId   Int
   citizen     Citizen   @relation(fields: [citizenId], references: [id])
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
-  location    String    // Ubicación específica del reclamo
   notes       String?   @db.Text // Notas adicionales
   
   @@index([type])
-  @@index([status])
   @@index([citizenId])
-}
-
-// Estados posibles para un reclamo
-enum Status {
-  PENDING    // Pendiente de revisión
-  REVIEWING  // En revisión
-  IN_PROCESS // En proceso
-  RESOLVED   // Resuelto
-  REJECTED   // Rechazado
 }

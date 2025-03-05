@@ -57,7 +57,7 @@ export async function createComplaint(data: {
   return await prisma.complaint.create({
     data: {
       ...data,
-      status: 'PENDING'
+      status: 'PENDIENTE'
     },
     include: {
       citizen: true
