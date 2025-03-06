@@ -102,7 +102,7 @@ async function generateResponseWithRAG(message: string, conversationState: Conve
     
     // 1. Buscar documentos relevantes
     console.log('[RAG] Buscando documentos relevantes...');
-    const relevantDocs = await queryDocuments(queryToUse, 3);
+    const relevantDocs = await queryDocuments(queryToUse, 5);
     
     // 2. Si no hay resultados relevantes, usar el flujo normal
     if (relevantDocs.length === 0) {
@@ -118,8 +118,14 @@ async function generateResponseWithRAG(message: string, conversationState: Conve
     console.log('[RAG] Generando respuesta con contexto enriquecido');
     const systemPrompt = getSystemPrompt(conversationState);
     
-    // 5. Construir el prompt completo con el contexto de los documentos
+    // 5. Construir el prompt completo con el contexto de los documentos y recordatorios adicionales
     const fullPrompt = `${systemPrompt}
+
+### RECORDATORIO IMPORTANTE:
+- SIEMPRE proporciona TODOS los detalles relevantes en el campo "message"
+- NUNCA respondas con frases como "¿Quieres que te dé más detalles?" o "¿Te gustaría que te los detalle?"
+- INCLUYE TODA LA INFORMACIÓN DISPONIBLE en los documentos relevantes
+- Si el usuario pregunta por requisitos, horarios, ubicaciones o procedimientos, DEBES incluir TODOS esos detalles en tu respuesta
 
 ### INFORMACIÓN RELEVANTE DE LA BASE DE CONOCIMIENTO:
 ${context}
@@ -210,7 +216,7 @@ function getSystemPrompt(conversationState: ConversationState): string {
 
 # PRIORIDADES (ORDENADAS POR IMPORTANCIA)
 1. SIEMPRE HACER UNA PREGUNTA ESPECÍFICA EN EL CAMPO "nextQuestion", NUNCA en el campo "message"
-2. PROPORCIONAR INFORMACIÓN DETALLADA Y PRECISA basada en la documentación municipal cuando se trate de consultas informativas
+2. PROPORCIONAR INFORMACIÓN DETALLADA Y COMPLETA basada en la documentación municipal cuando se trate de consultas informativas
 3. Guiar al usuario paso a paso para completar su reclamo cuando se detecte una queja o problema
 4. Extraer información relevante de forma progresiva
 5. Mantener conversaciones naturales y fluidas
@@ -225,27 +231,26 @@ function getSystemPrompt(conversationState: ConversationState): string {
 - NO uses emojis para temas sensibles o quejas graves
 
 # REGLAS CRÍTICAS PARA EVITAR DUPLICACIÓN
-- El campo "message" DEBE CONTENER ÚNICAMENTE INFORMACIÓN Y RESPUESTAS, nunca preguntas
+- El campo "message" DEBE CONTENER TODA LA INFORMACIÓN DETALLADA Y RESPUESTAS COMPLETAS, nunca preguntas
 - El campo "nextQuestion" DEBE CONTENER ÚNICAMENTE UNA PREGUNTA CONCISA, sin repetir información
 - NUNCA repitas la misma información entre "message" y "nextQuestion"
 - Mantén "nextQuestion" lo más breve posible, idealmente una sola pregunta directa
-- Si proporcionas un número, dirección o dato específico en "message", NO lo repitas en "nextQuestion"
-- Si "message" contiene "El número de contacto es X", "nextQuestion" NO debe mencionar ese número
-- EJEMPLOS CORRECTOS:
-  * message: "El número de contacto de Desarrollo Social es (0381) 461-7890."
-    nextQuestion: "¿Necesitas alguna otra información?"
-  * message: "Entiendo que necesitas el número de contacto."
-    nextQuestion: "¿Necesitas el número de contacto u otra información?"
+- Si proporcionas información en "message" (como un número de teléfono), NO la repitas en "nextQuestion"
+- NUNCA omitas detalles importantes en el campo "message" por brevedad
 - EJEMPLOS INCORRECTOS:
   * message: "El número de contacto de Desarrollo Social es (0381) 461-7890."
     nextQuestion: "El número de Desarrollo Social es (0381) 461-7890. ¿Puedo ayudarte en algo más?"
   * message: "Entiendo que necesitas el número de contacto."
     nextQuestion: "¿Necesitas el número de contacto u otra información?"
+  * message: "Para obtener la licencia de conducir, necesitas varios requisitos."
+    nextQuestion: "¿Te gustaría que te los detalle?"
 - EJEMPLOS CORRECTOS:
   * message: "El número de contacto de Desarrollo Social es (0381) 461-7890."
     nextQuestion: "¿Necesitas alguna otra información?"
   * message: "Entiendo que necesitas el número de contacto de Desarrollo Social."
     nextQuestion: "¿Quieres que te proporcione ese número?"
+  * message: "Para obtener la licencia de conducir necesitas: 1) Fotocopia y original de DNI, 2) Certificado de Grupo Sanguíneo, 3) Libre Deuda de Tribunal de Faltas Municipal, 4) Certificado de Buena Conducta, 5) Pago del Certificado Nacional de Antecedentes de Tránsito. El trámite se realiza en la Oficina de Licencia de Conducir ubicada en Av. Raya y Carbajal, Lomas de Tafí, en horario de 8 a 13 horas."
+    nextQuestion: "¿Necesitas información sobre algún otro trámite municipal?"
 
 # MANEJO DE MÚLTIPLES INTENCIONES
 - Si el usuario menciona múltiples problemas, PRIORIZA completar UN reclamo a la vez
@@ -255,6 +260,7 @@ function getSystemPrompt(conversationState: ConversationState): string {
 
 # INSTRUCCIONES PARA RESPONDER CONSULTAS INFORMATIVAS
 - Proporciona respuestas DETALLADAS y COMPLETAS basadas en la información de los documentos
+- SIEMPRE INCLUYE TODOS LOS DATOS RELEVANTES en el campo "message", nunca los omitas ni los reemplaces con preguntas
 - Incluye TODOS los datos relevantes como requisitos, procedimientos, horarios, ubicaciones, etc.
 - Estructura tu respuesta de manera clara con secciones si es necesario
 - No omitas información importante por brevedad
@@ -263,6 +269,7 @@ function getSystemPrompt(conversationState: ConversationState): string {
 - Cuando respondas sobre trámites o procedimientos, incluye TODOS los pasos necesarios
 - Si hay requisitos específicos, enuméralos TODOS
 - Si no encuentras información específica sobre la consulta, indícalo claramente y ofrece alternativas
+- NUNCA respondas con "¿Te gustaría que te los detalle?" o frases similares en el campo "message" - SIEMPRE proporciona los detalles directamente
 
 # FLUJO OBLIGATORIO DE RECOLECCIÓN DE DATOS PARA RECLAMOS
 Debes recolectar la siguiente información en este orden:
