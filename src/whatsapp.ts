@@ -1,9 +1,15 @@
-// whatsapp.ts
 import { Express, Request, Response } from 'express';
 import axios from 'axios';
 import { generateText } from './textGenerator';
-import { prisma, findOrCreateCitizen, createComplaint } from './prisma';
-import { getConversationState, setConversationState, initialConversationState } from './redis';
+import { findOrCreateCitizen, createComplaint } from './prisma';
+import { 
+  getConversationState, 
+  setConversationState, 
+  initialConversationState,
+  getMessageHistory,
+  addMessageToHistory,
+  redis
+} from './redis';
 import { handleCommand } from './commands';
 
 export async function sendWhatsAppMessage(to: string, message: string) {
@@ -32,14 +38,17 @@ export async function sendWhatsAppMessage(to: string, message: string) {
   }
 }
 
-function isReadyToSave(data?: any): boolean {
-  return !!(
-    data?.type &&
-    data?.description &&
-    data?.location &&
-    data?.citizenData?.name &&
-    data?.citizenData?.documentId &&
-    data?.citizenData?.address
+// Función para verificar si tenemos todos los datos necesarios para guardar el reclamo
+function isReadyToSave(complaintData: any): boolean {
+  console.log('Verificando si el reclamo está listo para guardar:', JSON.stringify(complaintData, null, 2));
+  
+  return (
+    complaintData.type &&
+    complaintData.description &&
+    complaintData.location &&
+    complaintData.citizenData?.name &&
+    complaintData.citizenData?.documentId &&
+    complaintData.citizenData?.address
   );
 }
 
@@ -91,9 +100,18 @@ export function setupWhatsAppWebhook(app: Express) {
         conversationState = initialConversationState;
       }
 
+      // Obtener el historial de mensajes
+      const messageHistory = await getMessageHistory(from);
+
+      // Añadir el mensaje del usuario al historial
+      await addMessageToHistory(from, 'user', userText);
+
       // Manejar comandos especiales
       if (userText.startsWith('/')) {
-        await handleCommand(userText.substring(1), from, conversationState);
+        const commandText = userText.substring(1);
+        // Añadir el comando al historial
+        await addMessageToHistory(from, 'user', userText);
+        await handleCommand(commandText, from, conversationState);
         return;
       }
 
@@ -101,24 +119,52 @@ export function setupWhatsAppWebhook(app: Express) {
       if (conversationState.awaitingConfirmation) {
         const upperText = userText.toUpperCase();
         if (upperText === 'CONFIRMAR') {
+          // Guardar el reclamo y reiniciar el estado
           await saveComplaint(from, conversationState.complaintData);
+          
+          // Asegurarse de que el estado se ha reiniciado completamente
+          await setConversationState(from, {
+            ...initialConversationState,
+            isComplaintInProgress: false,
+            awaitingConfirmation: false,
+            complaintData: {}
+          });
+          
           return;
         } else if (upperText === 'CANCELAR') {
-          await setConversationState(from, initialConversationState);
-          await sendWhatsAppMessage(from, 'Reclamo cancelado. ¿Puedo ayudarte en algo más?');
+          // Reiniciar el estado
+          await setConversationState(from, {
+            ...initialConversationState,
+            isComplaintInProgress: false,
+            awaitingConfirmation: false,
+            complaintData: {}
+          });
+          
+          const cancelMessage = 'Reclamo cancelado. ¿Puedo ayudarte en algo más?';
+          await sendWhatsAppMessage(from, cancelMessage);
+          await addMessageToHistory(from, 'assistant', cancelMessage);
           return;
         } else {
-          await sendWhatsAppMessage(
-            from,
-            'Por favor, responde "CONFIRMAR" para guardar el reclamo o "CANCELAR" para descartarlo.'
-          );
+          const promptMessage = 'Por favor, responde "CONFIRMAR" para guardar el reclamo o "CANCELAR" para descartarlo.';
+          await sendWhatsAppMessage(from, promptMessage);
+          await addMessageToHistory(from, 'assistant', promptMessage);
           return;
         }
       }
 
-      // Generar respuesta con OpenAI
-      const response = await generateText(userText, conversationState);
-      await sendWhatsAppMessage(from, response.message);
+      // Generar respuesta con OpenAI incluyendo el historial de mensajes
+      const response = await generateText(userText, conversationState, messageHistory);
+      
+      // Construir el mensaje completo incluyendo la pregunta siguiente si existe
+      let fullMessage = response.message;
+      if (response.nextQuestion && response.isComplaint) {
+        fullMessage = `${response.message}\n\n${response.nextQuestion}`;
+      }
+      
+      await sendWhatsAppMessage(from, fullMessage);
+      
+      // Añadir la respuesta del asistente al historial
+      await addMessageToHistory(from, 'assistant', fullMessage);
 
       // Actualizar estado de la conversación
       if (response.isComplaint) {
@@ -142,6 +188,9 @@ export function setupWhatsAppWebhook(app: Express) {
           conversationState.awaitingConfirmation = true;
           await setConversationState(from, conversationState);
           await sendWhatsAppMessage(from, confirmationMessage);
+          
+          // Añadir el mensaje de confirmación al historial
+          await addMessageToHistory(from, 'assistant', confirmationMessage);
           return;
         }
       }
@@ -173,16 +222,19 @@ async function saveComplaint(from: string, complaintData: any) {
       citizenId: citizen.id
     });
 
-    await setConversationState(from, initialConversationState);
-    await sendWhatsAppMessage(
-      from,
-      `✅ Reclamo registrado exitosamente!\nNúmero de reclamo: #${complaint.id}\nTipo: ${complaint.type}\nEstado: Pendiente de revisión`
-    );
+    // Crear el mensaje de confirmación
+    const confirmationMessage = `✅ Reclamo registrado exitosamente!\nNúmero de reclamo: #${complaint.id}\nTipo: ${complaint.type}\nEstado: Pendiente de revisión`;
+    
+    await sendWhatsAppMessage(from, confirmationMessage);
+
+    await sendWhatsAppMessage(from, "La conversación será reiniciada.");
+
+    await redis.del(`conversation:${from}`);
+
   } catch (error) {
-    console.error('Error saving complaint:', error);
-    await sendWhatsAppMessage(
-      from,
-      'Lo siento, hubo un problema al guardar tu reclamo. Por favor, intenta nuevamente.'
-    );
+    console.error('Error al guardar reclamo:', error);
+    const errorMessage = 'Lo siento, ocurrió un error al guardar tu reclamo. Por favor, intenta nuevamente.';
+    await sendWhatsAppMessage(from, errorMessage);
+    await addMessageToHistory(from, 'assistant', errorMessage);
   }
 }

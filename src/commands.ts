@@ -1,5 +1,5 @@
 import { ConversationState, Command, COMMANDS, ComplaintStatus } from './types';
-import { setConversationState, initialConversationState } from './redis';
+import { setConversationState, initialConversationState, addMessageToHistory } from './redis';
 import { sendWhatsAppMessage } from './whatsapp';
 import { prisma } from './prisma';
 
@@ -29,26 +29,32 @@ export async function handleCommand(command: string, from: string, state: Conver
       break;
     case COMMANDS.RECLAMO:
       if (args.length === 0) {
-        await sendWhatsAppMessage(from, 'Por favor, especifica el número de reclamo. Ejemplo: /reclamo 123');
+        const message = 'Por favor, especifica el número de reclamo. Ejemplo: /reclamo 123';
+        await sendWhatsAppMessage(from, message);
+        await addMessageToHistory(from, 'assistant', message);
       } else {
         await handleComplaintDetails(from, parseInt(args[0]));
       }
       break;
     default:
-      await sendWhatsAppMessage(from, 
-        'Comando no reconocido. Usa /ayuda para ver los comandos disponibles.');
+      const message = 'Comando no reconocido. Usa /ayuda para ver los comandos disponibles.';
+      await sendWhatsAppMessage(from, message);
+      await addMessageToHistory(from, 'assistant', message);
   }
 }
 
 async function handleCancel(from: string, state: ConversationState): Promise<void> {
+  let message = '';
+  
   if (!state.isComplaintInProgress) {
-    await sendWhatsAppMessage(from, 'No hay ninguna operación en curso para cancelar.');
-    return;
+    message = 'No hay ninguna operación en curso para cancelar.';
+  } else {
+    await setConversationState(from, initialConversationState);
+    message = 'Se ha cancelado el reclamo en curso. Puedes iniciar uno nuevo cuando quieras.';
   }
-
-  await setConversationState(from, initialConversationState);
-  await sendWhatsAppMessage(from, 
-    'Se ha cancelado el reclamo en curso. Puedes iniciar uno nuevo cuando quieras.');
+  
+  await sendWhatsAppMessage(from, message);
+  await addMessageToHistory(from, 'assistant', message);
 }
 
 async function handleHelp(from: string): Promise<void> {
@@ -64,42 +70,51 @@ async function handleHelp(from: string): Promise<void> {
 Para iniciar un reclamo, simplemente describe tu problema y te guiaré en el proceso.`;
 
   await sendWhatsAppMessage(from, helpMessage);
+  await addMessageToHistory(from, 'assistant', helpMessage);
 }
 
 async function handleStatus(from: string, state: ConversationState): Promise<void> {
+  let message = '';
+  
   if (!state.isComplaintInProgress) {
-    await sendWhatsAppMessage(from, 'No hay ningún reclamo en curso.');
-    return;
-  }
-
-  const { complaintData } = state;
-  const status = `Estado actual del reclamo:
+    message = 'No hay ningún reclamo en curso.';
+  } else {
+    const { complaintData } = state;
+    message = `Estado actual del reclamo:
 ${complaintData.type ? `✅ Tipo: ${complaintData.type}` : '❌ Tipo: Pendiente'}
 ${complaintData.description ? `✅ Descripción: ${complaintData.description}` : '❌ Descripción: Pendiente'}
 ${complaintData.location ? `✅ Ubicación: ${complaintData.location}` : '❌ Ubicación: Pendiente'}
 ${complaintData.citizenData?.name ? `✅ Nombre: ${complaintData.citizenData.name}` : '❌ Nombre: Pendiente'}
 ${complaintData.citizenData?.documentId ? `✅ DNI: ${complaintData.citizenData.documentId}` : '❌ DNI: Pendiente'}
 ${complaintData.citizenData?.address ? `✅ Dirección: ${complaintData.citizenData.address}` : '❌ Dirección: Pendiente'}`;
+  }
 
-  await sendWhatsAppMessage(from, status);
+  await sendWhatsAppMessage(from, message);
+  await addMessageToHistory(from, 'assistant', message);
 }
 
 async function handleReset(from: string): Promise<void> {
+  const message = 'La conversación ha sido reiniciada. ¿En qué puedo ayudarte?';
+  
   await setConversationState(from, initialConversationState);
-  await sendWhatsAppMessage(from, 
-    'La conversación ha sido reiniciada. ¿En qué puedo ayudarte?');
+  await sendWhatsAppMessage(from, message);
+  await addMessageToHistory(from, 'assistant', message);
 }
 
 async function handleConfirm(from: string, state: ConversationState): Promise<void> {
+  let message = '';
+  
   if (!state.awaitingConfirmation) {
-    await sendWhatsAppMessage(from, 
-      'No hay ningún reclamo pendiente de confirmación.');
-    return;
+    message = 'No hay ningún reclamo pendiente de confirmación.';
+  } else {
+    // La confirmación real se maneja en whatsapp.ts
+    state.confirmedData = state.complaintData;
+    await setConversationState(from, state);
+    message = 'Procesando confirmación...';
   }
-
-  // La confirmación real se maneja en whatsapp.ts
-  state.confirmedData = state.complaintData;
-  await setConversationState(from, state);
+  
+  await sendWhatsAppMessage(from, message);
+  await addMessageToHistory(from, 'assistant', message);
 }
 
 function getStatusEmoji(status: ComplaintStatus): string {
@@ -129,25 +144,29 @@ async function handleMyComplaints(from: string): Promise<void> {
       }
     });
 
+    let message = '';
+    
     if (!citizen || citizen.complaints.length === 0) {
-      await sendWhatsAppMessage(from, 'No tienes reclamos registrados.');
-      return;
-    }
-
-    const complaintsList = citizen.complaints.map(complaint => {
-      const statusEmoji = getStatusEmoji(complaint.status as ComplaintStatus);
-      return `🔸 #${complaint.id} - ${complaint.type} ${statusEmoji}
+      message = 'No tienes reclamos registrados.';
+    } else {
+      const complaintsList = citizen.complaints.map(complaint => {
+        const statusEmoji = getStatusEmoji(complaint.status as ComplaintStatus);
+        return `🔸 #${complaint.id} - ${complaint.type} ${statusEmoji}
       📍 ${complaint.location}
       📅 ${complaint.createdAt.toLocaleDateString()}`;
-    }).join('\n\n');
+      }).join('\n\n');
 
-    await sendWhatsAppMessage(from, 
-      `Tus reclamos:\n\n${complaintsList}\n\nPara ver más detalles de un reclamo específico, usa /reclamo <número>`);
+      message = `Tus reclamos:\n\n${complaintsList}\n\nPara ver más detalles de un reclamo específico, usa /reclamo <número>`;
+    }
+
+    await sendWhatsAppMessage(from, message);
+    await addMessageToHistory(from, 'assistant', message);
 
   } catch (error) {
     console.error('Error al obtener reclamos:', error);
-    await sendWhatsAppMessage(from, 
-      'Lo siento, hubo un problema al obtener tus reclamos. Por favor, intenta más tarde.');
+    const errorMessage = 'Lo siento, hubo un problema al obtener tus reclamos. Por favor, intenta más tarde.';
+    await sendWhatsAppMessage(from, errorMessage);
+    await addMessageToHistory(from, 'assistant', errorMessage);
   }
 }
 
@@ -165,14 +184,13 @@ async function handleComplaintDetails(from: string, complaintId: number): Promis
       }
     });
 
+    let message = '';
+    
     if (!complaint) {
-      await sendWhatsAppMessage(from, 
-        'No se encontró el reclamo especificado o no tienes permiso para verlo.');
-      return;
-    }
-
-    const statusEmoji = getStatusEmoji(complaint.status as ComplaintStatus);
-    const details = `📋 Detalles del Reclamo #${complaint.id}:
+      message = 'No se encontró el reclamo especificado o no tienes permiso para verlo.';
+    } else {
+      const statusEmoji = getStatusEmoji(complaint.status as ComplaintStatus);
+      message = `📋 Detalles del Reclamo #${complaint.id}:
 🔹 Tipo: ${complaint.type}
 📝 Descripción: ${complaint.description}
 📍 Ubicación: ${complaint.location}
@@ -183,12 +201,15 @@ ${statusEmoji} Estado: ${complaint.status}
 - Nombre: ${complaint.citizen.name}
 - DNI: ${complaint.citizen.documentId}
 - Dirección: ${complaint.citizen.address}`;
+    }
 
-    await sendWhatsAppMessage(from, details);
+    await sendWhatsAppMessage(from, message);
+    await addMessageToHistory(from, 'assistant', message);
 
   } catch (error) {
     console.error('Error al obtener detalles del reclamo:', error);
-    await sendWhatsAppMessage(from, 
-      'Lo siento, hubo un problema al obtener los detalles del reclamo. Por favor, intenta más tarde.');
+    const errorMessage = 'Lo siento, hubo un problema al obtener los detalles del reclamo. Por favor, intenta más tarde.';
+    await sendWhatsAppMessage(from, errorMessage);
+    await addMessageToHistory(from, 'assistant', errorMessage);
   }
 }

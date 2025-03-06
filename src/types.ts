@@ -22,6 +22,19 @@ export interface CitizenData {
   address?: string;
 }
 
+// Mensaje en la conversación
+export interface ConversationMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+}
+
+// Estructura completa de datos de conversación
+export interface ConversationData {
+  state: ConversationState;
+  messageHistory: ConversationMessage[];
+}
+
 // Estado de la conversación
 export interface ConversationState {
   isComplaintInProgress: boolean;
