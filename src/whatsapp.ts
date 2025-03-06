@@ -11,6 +11,7 @@ import {
   redis
 } from './redis';
 import { handleCommand } from './commands';
+import { IntentType } from './types';
 
 export async function sendWhatsAppMessage(to: string, message: string) {
   const token = process.env.WHATSAPP_TOKEN;
@@ -111,7 +112,7 @@ export function setupWhatsAppWebhook(app: Express) {
         const commandText = userText.substring(1);
         // Añadir el comando al historial
         await addMessageToHistory(from, 'user', userText);
-        await handleCommand(commandText, from, conversationState);
+        await handleCommand(from, commandText, conversationState);
         return;
       }
 
@@ -152,50 +153,8 @@ export function setupWhatsAppWebhook(app: Express) {
         }
       }
 
-      // Generar respuesta con OpenAI incluyendo el historial de mensajes
-      const response = await generateText(userText, conversationState, messageHistory);
-      
-      // Construir el mensaje completo incluyendo la pregunta siguiente si existe
-      let fullMessage = response.message;
-      if (response.nextQuestion && response.isComplaint) {
-        fullMessage = `${response.message}\n\n${response.nextQuestion}`;
-      }
-      
-      await sendWhatsAppMessage(from, fullMessage);
-      
-      // Añadir la respuesta del asistente al historial
-      await addMessageToHistory(from, 'assistant', fullMessage);
-
-      // Actualizar estado de la conversación
-      if (response.isComplaint) {
-        conversationState.isComplaintInProgress = true;
-        conversationState.complaintData = {
-          ...conversationState.complaintData,
-          ...response.data
-        };
-
-        // Si tenemos todos los datos, pedir confirmación
-        if (isReadyToSave(conversationState.complaintData)) {
-          const confirmationMessage = `Por favor, confirma que los siguientes datos son correctos:
-- Tipo: ${conversationState.complaintData.type}
-- Descripción: ${conversationState.complaintData.description}
-- Ubicación: ${conversationState.complaintData.location}
-- Nombre: ${conversationState.complaintData.citizenData?.name}
-- DNI: ${conversationState.complaintData.citizenData?.documentId}
-- Dirección: ${conversationState.complaintData.citizenData?.address}
-`;
-
-          conversationState.awaitingConfirmation = true;
-          await setConversationState(from, conversationState);
-          await sendWhatsAppMessage(from, confirmationMessage);
-          
-          // Añadir el mensaje de confirmación al historial
-          await addMessageToHistory(from, 'assistant', confirmationMessage);
-          return;
-        }
-      }
-
-      await setConversationState(from, conversationState);
+      // Procesar mensaje
+      await processMessage(from, userText, conversationState, messageHistory);
     } catch (error) {
       console.error('Error al procesar mensaje:', error);
       await sendWhatsAppMessage(
@@ -204,6 +163,201 @@ export function setupWhatsAppWebhook(app: Express) {
       );
     }
   });
+}
+
+export async function webhook(req: Request, res: Response) {
+  try {
+    const { body } = req;
+    
+    // Verificar si es un mensaje entrante de WhatsApp
+    if (
+      body.object === 'whatsapp_business_account' &&
+      body.entry &&
+      body.entry[0].changes &&
+      body.entry[0].changes[0].value.messages &&
+      body.entry[0].changes[0].value.messages[0]
+    ) {
+      const from = body.entry[0].changes[0].value.messages[0].from;
+      const userText = body.entry[0].changes[0].value.messages[0].text?.body;
+
+      if (!userText) {
+        console.log('Mensaje recibido sin texto, ignorando');
+        return res.sendStatus(200);
+      }
+
+      console.log(`Mensaje recibido de ${from}: ${userText}`);
+
+      // Procesar el mensaje (la función processMessage ahora obtiene el estado y el historial internamente)
+      await processMessage(from, userText);
+
+      return res.sendStatus(200);
+    }
+    return res.sendStatus(200);
+  } catch (error) {
+    console.error('Error en webhook:', error);
+    return res.sendStatus(500);
+  }
+}
+
+async function processMessage(from: string, message: string, conversationState?: any, messageHistory?: any) {
+  // Verificar si es un comando
+  if (message.startsWith('/')) {
+    // Obtener el estado actual de la conversación si no se proporcionó
+    if (!conversationState) {
+      conversationState = await getConversationState(from);
+      if (!conversationState) {
+        conversationState = initialConversationState;
+      }
+    }
+    return await handleCommand(from, message, conversationState);
+  }
+
+  // Obtener el estado actual de la conversación si no se proporcionó
+  if (!conversationState) {
+    conversationState = await getConversationState(from);
+    if (!conversationState) {
+      conversationState = initialConversationState;
+    }
+  }
+
+  // Actualizar timestamp de última interacción
+  conversationState.lastInteractionTimestamp = Date.now();
+
+  // Añadir mensaje al historial
+  await addMessageToHistory(from, 'user', message);
+
+  // Obtener historial de mensajes si no se proporcionó
+  if (!messageHistory) {
+    messageHistory = await getMessageHistory(from);
+  }
+
+  // Generar respuesta con OpenAI
+  const response = await generateText(message, conversationState, messageHistory);
+
+  // Detectar la intención del usuario basado en la respuesta
+  const newIntent = response.isComplaint ? IntentType.COMPLAINT : 
+                   (message.toLowerCase().includes('hola') || message.toLowerCase().includes('buenos')) ? IntentType.GREETING :
+                   (conversationState.isComplaintInProgress && !response.isComplaint) ? IntentType.INQUIRY :
+                   IntentType.OTHER;
+
+  // Actualizar el contexto de la conversación
+  if (newIntent !== conversationState.currentIntent) {
+    // Guardar la intención anterior
+    conversationState.previousIntent = conversationState.currentIntent;
+    
+    // Si estábamos en medio de un reclamo y cambiamos a otra intención, marcar como interrumpido
+    if (conversationState.currentIntent === IntentType.COMPLAINT && 
+        conversationState.isComplaintInProgress && 
+        newIntent !== IntentType.COMPLAINT) {
+      conversationState.interruptedFlow = true;
+      conversationState.interruptionContext = {
+        originalIntent: IntentType.COMPLAINT,
+        pendingQuestion: response.nextQuestion,
+        resumePoint: conversationState.currentStep
+      };
+    }
+    
+    // Actualizar la intención actual
+    conversationState.currentIntent = newIntent;
+  }
+
+  // Si hay un flujo interrumpido y volvemos a la intención original, restaurar el contexto
+  if (conversationState.interruptedFlow && 
+      newIntent === conversationState.interruptionContext?.originalIntent) {
+    conversationState.interruptedFlow = false;
+  }
+
+  // Actualizar los temas de la conversación
+  if (!conversationState.conversationTopics) {
+    conversationState.conversationTopics = [];
+  }
+  
+  // Extraer posible tema de la conversación (simplificado)
+  const possibleTopic = message.split(' ').find(word => word.length > 5);
+  if (possibleTopic && !conversationState.conversationTopics.includes(possibleTopic)) {
+    conversationState.conversationTopics.push(possibleTopic);
+  }
+
+  // Actualizar campos pendientes si es un reclamo
+  if (response.isComplaint) {
+    const pendingFields = [];
+    const complaintData = response.data || {};
+    
+    if (!complaintData.type) pendingFields.push('type');
+    if (!complaintData.description) pendingFields.push('description');
+    if (!complaintData.location) pendingFields.push('location');
+    if (!complaintData.citizenData?.name) pendingFields.push('name');
+    if (!complaintData.citizenData?.documentId) pendingFields.push('documentId');
+    if (!complaintData.citizenData?.address) pendingFields.push('address');
+    
+    conversationState.pendingFields = pendingFields;
+  }
+
+  // Actualizar el estado de la conversación con los datos del reclamo
+  if (response.isComplaint && response.data) {
+    conversationState.isComplaintInProgress = true;
+    
+    // Actualizar el paso actual basado en los campos pendientes
+    if (conversationState.pendingFields?.length === 0) {
+      conversationState.currentStep = 'AWAITING_CONFIRMATION';
+      conversationState.awaitingConfirmation = true;
+    } else if (!conversationState.complaintData.type) {
+      conversationState.currentStep = 'COLLECTING_TYPE';
+    } else if (!conversationState.complaintData.description || !conversationState.complaintData.location) {
+      conversationState.currentStep = 'COLLECTING_DESCRIPTION';
+    } else {
+      conversationState.currentStep = 'COLLECTING_CITIZEN_DATA';
+    }
+
+    // Actualizar los datos del reclamo
+    conversationState.complaintData = {
+      ...conversationState.complaintData,
+      ...response.data,
+      citizenData: {
+        ...conversationState.complaintData.citizenData,
+        ...response.data.citizenData
+      }
+    };
+  }
+
+  // Guardar el estado actualizado
+  await setConversationState(from, conversationState);
+
+  // Construir mensaje de respuesta
+  let responseMessage = response.message || '';
+  
+  // Añadir información sobre el flujo interrumpido si es relevante
+  if (conversationState.interruptedFlow && 
+      conversationState.currentIntent === IntentType.COMPLAINT &&
+      conversationState.previousIntent !== IntentType.COMPLAINT) {
+    responseMessage += "\n\nVolvamos a tu reclamo anterior. ";
+  }
+  
+  // Añadir la pregunta al final, evitando duplicación
+  if (response.nextQuestion) {
+    // Verificar si la pregunta ya está incluida en el mensaje
+    const questionLowerCase = response.nextQuestion.toLowerCase();
+    const messageLowerCase = responseMessage.toLowerCase();
+    
+    // Solo añadir la pregunta si no está ya incluida en el mensaje
+    if (!messageLowerCase.includes(questionLowerCase)) {
+      responseMessage += '\n\n' + response.nextQuestion;
+    } else {
+      console.log('Evitada duplicación de pregunta:', response.nextQuestion);
+    }
+  }
+
+  // Enviar respuesta
+  await sendWhatsAppMessage(from, responseMessage);
+
+  // Añadir respuesta al historial
+  await addMessageToHistory(from, 'assistant', responseMessage);
+
+  // Si el estado es de confirmación, verificar si podemos guardar
+  if (conversationState.awaitingConfirmation && isReadyToSave(conversationState.complaintData)) {
+    conversationState.confirmedData = conversationState.complaintData;
+    await setConversationState(from, conversationState);
+  }
 }
 
 async function saveComplaint(from: string, complaintData: any) {

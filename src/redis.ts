@@ -1,5 +1,5 @@
 import { Redis } from '@upstash/redis';
-import { ConversationState, ConversationData, ConversationMessage } from './types';
+import { ConversationState, ConversationData, ConversationMessage, IntentType } from './types';
 
 // Inicializar cliente de Redis
 export const redis = new Redis({
@@ -142,5 +142,19 @@ export async function deleteConversationState(phoneNumber: string): Promise<void
 export const initialConversationState: ConversationState = {
   isComplaintInProgress: false,
   complaintData: {},
-  currentStep: 'INIT'
+  currentStep: 'INIT',
+  awaitingConfirmation: false,
+  
+  // Nuevos campos de contexto
+  currentIntent: IntentType.GREETING,
+  previousIntent: undefined,
+  pendingFields: [],
+  conversationTopics: [],
+  lastInteractionTimestamp: Date.now(),
+  interruptedFlow: false,
+  interruptionContext: {
+    originalIntent: undefined,
+    pendingQuestion: undefined,
+    resumePoint: undefined
+  }
 };

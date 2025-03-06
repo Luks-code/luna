@@ -42,6 +42,28 @@ export interface ConversationState {
   currentStep: 'INIT' | 'COLLECTING_TYPE' | 'COLLECTING_DESCRIPTION' | 'COLLECTING_CITIZEN_DATA' | 'AWAITING_CONFIRMATION' | 'COMPLETE';
   awaitingConfirmation?: boolean;
   confirmedData?: ComplaintData;
+  
+  // Nuevos campos para manejo de contexto
+  currentIntent?: IntentType;
+  previousIntent?: IntentType;
+  pendingFields?: string[]; // Campos que faltan por completar
+  conversationTopics?: string[]; // Temas discutidos en la conversación
+  lastInteractionTimestamp?: number; // Para manejar tiempos de inactividad
+  interruptedFlow?: boolean; // Indica si el flujo fue interrumpido
+  interruptionContext?: { // Contexto de la interrupción
+    originalIntent?: string;
+    pendingQuestion?: string;
+    resumePoint?: string;
+  };
+}
+
+// Tipos de intención
+export enum IntentType {
+  COMPLAINT = 'COMPLAINT',
+  INQUIRY = 'INQUIRY',
+  GREETING = 'GREETING',
+  FOLLOWUP = 'FOLLOWUP',
+  OTHER = 'OTHER'
 }
 
 // Comandos disponibles

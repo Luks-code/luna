@@ -1,9 +1,9 @@
-import { ConversationState, Command, COMMANDS, ComplaintStatus } from './types';
+import { Command, COMMANDS, ComplaintStatus, ConversationState } from './types';
 import { setConversationState, initialConversationState, addMessageToHistory } from './redis';
 import { sendWhatsAppMessage } from './whatsapp';
 import { prisma } from './prisma';
 
-export async function handleCommand(command: string, from: string, state: ConversationState): Promise<void> {
+export async function handleCommand(from: string, command: string, state: ConversationState): Promise<void> {
   const parts = command.toUpperCase().split(' ');
   const cmd = parts[0] as Command;
   const args = parts.slice(1);
