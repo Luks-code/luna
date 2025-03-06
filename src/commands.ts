@@ -195,7 +195,8 @@ async function handleComplaintDetails(from: string, complaintId: number): Promis
 📝 Descripción: ${complaint.description}
 📍 Ubicación: ${complaint.location}
 📅 Fecha: ${complaint.createdAt.toLocaleDateString()}
-${statusEmoji} Estado: ${complaint.status}
+${statusEmoji} Estado: ${complaint.status}${complaint.status === ComplaintStatus.CANCELADO && complaint.rejectReason ? `
+❌ Motivo de rechazo: ${complaint.rejectReason}` : ''}
 
 👤 Datos del Ciudadano:
 - Nombre: ${complaint.citizen.name}
