@@ -1,41 +1,9 @@
 // textGenerator.ts
 import openai from './openai';
-import { GPTResponse, ConversationState, ConversationMessage } from './types';
+import { GPTResponse, ConversationState, ConversationMessage, IntentType } from './types';
 import { ComplaintTypes } from './prisma';
 import { ChatCompletionMessageParam } from 'openai/resources/chat';
-import { IntentType } from "./types";
-import { queryDocuments } from "./rag/query";
-
-// Función para determinar si una consulta debería usar RAG
-async function shouldUseRAG(message: string, conversationState: ConversationState): Promise<boolean> {
-  console.log('[RAG] Evaluando si se debe usar RAG para la consulta...');
-  
-  // Si hay un reclamo en progreso, no usar RAG a menos que sea una consulta informativa
-  if (conversationState?.isComplaintInProgress && 
-      conversationState?.currentIntent !== IntentType.INQUIRY) {
-    console.log('[RAG] No se usará RAG porque hay un reclamo en progreso');
-    return false;
-  }
-  
-  // Palabras clave que indican comandos específicos que no deberían usar RAG
-  const commandKeywords = [
-    'cancelar', 'ayuda', 'estado', 'reiniciar', 'confirmar', 
-    'mis reclamos', 'reclamo', 'quiero hacer un reclamo'
-  ];
-  
-  // Si el mensaje contiene palabras clave de comandos, no usar RAG
-  const lowercaseMessage = message.toLowerCase();
-  const isCommand = commandKeywords.some(keyword => lowercaseMessage.includes(keyword));
-  
-  if (isCommand) {
-    console.log('[RAG] No se usará RAG porque parece ser un comando específico');
-    return false;
-  }
-  
-  // Por defecto, intentar usar RAG para cualquier consulta que no sea un comando específico
-  console.log('[RAG] Se intentará usar RAG para esta consulta');
-  return true;
-}
+import { queryDocuments, formatDocumentsForContext, getRelevantContext } from './rag/queryPinecone';
 
 // Función para extraer el tema principal de una consulta
 function extractMainTopic(message: string): string | null {
@@ -144,39 +112,14 @@ async function generateResponseWithRAG(message: string, conversationState: Conve
     
     // 3. Preparar el contexto con la información recuperada
     console.log(`[RAG] Preparando contexto con ${relevantDocs.length} documentos relevantes`);
-    const context = relevantDocs.map((doc, i) => {
-      return `Documento ${i+1} (Fuente: ${doc.metadata?.source || 'Desconocida'}):\n${doc.content}`;
-    }).join('\n\n');
+    const context = formatDocumentsForContext(relevantDocs);
     
     // 4. Generar la respuesta incluyendo el contexto
     console.log('[RAG] Generando respuesta con contexto enriquecido');
-    const systemPromptWithContext = getSystemPrompt(conversationState);
+    const systemPrompt = getSystemPrompt(conversationState);
     
-    // Mejorar el prompt para generar respuestas más detalladas
-    const enhancedPrompt = `${systemPromptWithContext}
-
-### INSTRUCCIONES ESPECIALES PARA RESPONDER CONSULTAS INFORMATIVAS:
-- Proporciona respuestas DETALLADAS y COMPLETAS basadas en la información de los documentos.
-- Incluye TODOS los datos relevantes como requisitos, procedimientos, horarios, ubicaciones, etc.
-- Estructura tu respuesta de manera clara con secciones si es necesario.
-- Si el usuario está preguntando por más detalles sobre un tema previo, asegúrate de proporcionar información adicional.
-- No omitas información importante por brevedad.
-- Si la información en los documentos es técnica, explícala en términos sencillos.
-- SIEMPRE utiliza toda la información relevante de los documentos para dar una respuesta completa.
-- Cuando respondas sobre trámites o procedimientos, incluye TODOS los pasos necesarios.
-- Si hay requisitos específicos, enuméralos TODOS.
-
-### REGLAS CRÍTICAS PARA EVITAR DUPLICACIÓN EN RESPUESTAS RAG:
-- El campo "message" DEBE CONTENER ÚNICAMENTE LA INFORMACIÓN ENCONTRADA en los documentos, NUNCA preguntas
-- El campo "nextQuestion" DEBE CONTENER ÚNICAMENTE UNA PREGUNTA CONCISA, sin repetir información
-- NUNCA repitas información entre "message" y "nextQuestion"
-- Si proporcionas un número, dirección o dato específico en "message", NO lo repitas en "nextQuestion"
-- Mantén "nextQuestion" lo más breve posible, idealmente una sola pregunta directa
-- EJEMPLOS CORRECTOS:
-  * message: "El número de contacto de Desarrollo Social es (0381) 461-7890."
-    nextQuestion: "¿Necesitas alguna otra información?"
-  * message: "Para obtener una habilitación comercial necesitas: 1) DNI, 2) Título de propiedad, 3) Planos aprobados."
-    nextQuestion: "¿Puedo ayudarte con algún otro trámite?"
+    // 5. Construir el prompt completo con el contexto de los documentos
+    const fullPrompt = `${systemPrompt}
 
 ### INFORMACIÓN RELEVANTE DE LA BASE DE CONOCIMIENTO:
 ${context}
@@ -192,8 +135,8 @@ ${message}
 
 ### Respuesta:`;
     
-    // 5. Llamar a la API de OpenAI con el contexto enriquecido
-    const response = await callOpenAI(enhancedPrompt);
+    // 6. Llamar a la API de OpenAI con el contexto enriquecido
+    const response = await callOpenAI(fullPrompt);
     console.log('[RAG] Respuesta generada exitosamente usando RAG');
     
     return response;
@@ -220,15 +163,15 @@ export async function generateText(message: string, conversationState?: Conversa
     const state = conversationState || {} as ConversationState;
     const history = messageHistory || [];
     
-    // Determinar si debemos usar RAG
-    const useRAG = await shouldUseRAG(message, state);
+    // Verificar si es un comando específico que no debería usar RAG
+    const isCommand = isSpecificCommand(message);
     
-    if (useRAG) {
-      console.log('[Luna] Se usará RAG para generar la respuesta');
-      return await generateResponseWithRAG(message, state, history);
-    } else {
-      console.log('[Luna] Se usará el flujo estándar para generar la respuesta');
+    if (isCommand) {
+      console.log('[Luna] Se usará el flujo estándar para un comando específico');
       return await generateStandardResponse(message, state, history);
+    } else {
+      console.log('[Luna] Se usará RAG por defecto para generar la respuesta');
+      return await generateResponseWithRAG(message, state, history);
     }
   } catch (error) {
     console.error('[Luna] Error al generar texto:', error);
@@ -239,29 +182,60 @@ export async function generateText(message: string, conversationState?: Conversa
   }
 }
 
+// Función para verificar si es un comando específico
+function isSpecificCommand(message: string): boolean {
+  // Palabras clave que indican comandos específicos que no deberían usar RAG
+  const commandKeywords = [
+    'cancelar', 'ayuda', 'estado', 'reiniciar', 'confirmar', 
+    'reclamo', 'queja', 'denunciar', 'reportar'
+  ];
+  
+  // Si el mensaje contiene palabras clave de comandos, es un comando específico
+  const lowercaseMessage = message.toLowerCase();
+  const isCommand = commandKeywords.some(keyword => lowercaseMessage.includes(keyword));
+  
+  if (isCommand) {
+    console.log('[Luna] Detectado comando específico:', message);
+  }
+  
+  return isCommand;
+}
+
 // Exportar la función por defecto para compatibilidad con código existente
 export default generateText;
 
 // Función para obtener el prompt del sistema basado en el estado actual
 function getSystemPrompt(conversationState: ConversationState): string {
-  return `Eres Nina, el asistente virtual del municipio de Tafí Viejo que ayuda a los ciudadanos a registrar reclamos y resolver dudas de manera conversacional y amigable.
+  return `Eres Nina, el asistente virtual del municipio de Tafí Viejo que ayuda a los ciudadanos a responder consultas sobre servicios municipales y registrar reclamos de manera conversacional y amigable.
 
 # PRIORIDADES (ORDENADAS POR IMPORTANCIA)
 1. SIEMPRE HACER UNA PREGUNTA ESPECÍFICA EN EL CAMPO "nextQuestion", NUNCA en el campo "message"
-2. Guiar al usuario paso a paso para completar su reclamo
-3. Extraer información relevante de forma progresiva
-4. Mantener conversaciones naturales y fluidas
-5. Si el usuario saluda, debes presentarte con tu nombre y comunicar tu funcionalidad.
-6. MANTENER EL CONTEXTO incluso si el usuario cambia de tema temporalmente
-7. RETOMAR el flujo de recolección de datos si fue interrumpido
+2. PROPORCIONAR INFORMACIÓN DETALLADA Y PRECISA basada en la documentación municipal cuando se trate de consultas informativas
+3. Guiar al usuario paso a paso para completar su reclamo cuando se detecte una queja o problema
+4. Extraer información relevante de forma progresiva
+5. Mantener conversaciones naturales y fluidas
+6. Si el usuario saluda, debes presentarte con tu nombre y comunicar tu funcionalidad.
+7. MANTENER EL CONTEXTO incluso si el usuario cambia de tema temporalmente
+8. RETOMAR el flujo de recolección de datos si fue interrumpido
+
+# ESTILO DE COMUNICACIÓN
+- USA EMOJIS APROPIADOS para dar vida a tus mensajes, sin sobrecargarlos
+- Mantén un tono amigable pero profesional
+- NO uses emojis en exceso, solo cuando sea apropiado
+- NO uses emojis para temas sensibles o quejas graves
 
 # REGLAS CRÍTICAS PARA EVITAR DUPLICACIÓN
 - El campo "message" DEBE CONTENER ÚNICAMENTE INFORMACIÓN Y RESPUESTAS, nunca preguntas
 - El campo "nextQuestion" DEBE CONTENER ÚNICAMENTE UNA PREGUNTA CONCISA, sin repetir información
 - NUNCA repitas la misma información entre "message" y "nextQuestion"
 - Mantén "nextQuestion" lo más breve posible, idealmente una sola pregunta directa
-- Si proporcionas información en "message" (como un número de teléfono), NO la repitas en "nextQuestion"
+- Si proporcionas un número, dirección o dato específico en "message", NO lo repitas en "nextQuestion"
 - Si "message" contiene "El número de contacto es X", "nextQuestion" NO debe mencionar ese número
+- EJEMPLOS CORRECTOS:
+  * message: "El número de contacto de Desarrollo Social es (0381) 461-7890."
+    nextQuestion: "¿Necesitas alguna otra información?"
+  * message: "Entiendo que necesitas el número de contacto."
+    nextQuestion: "¿Necesitas el número de contacto u otra información?"
 - EJEMPLOS INCORRECTOS:
   * message: "El número de contacto de Desarrollo Social es (0381) 461-7890."
     nextQuestion: "El número de Desarrollo Social es (0381) 461-7890. ¿Puedo ayudarte en algo más?"
@@ -279,7 +253,18 @@ function getSystemPrompt(conversationState: ConversationState): string {
 - Si el usuario proporciona información contradictoria, usa la información más reciente
 - Si el usuario cambia completamente de tema, confirma si desea abandonar el reclamo actual
 
-# FLUJO OBLIGATORIO DE RECOLECCIÓN DE DATOS
+# INSTRUCCIONES PARA RESPONDER CONSULTAS INFORMATIVAS
+- Proporciona respuestas DETALLADAS y COMPLETAS basadas en la información de los documentos
+- Incluye TODOS los datos relevantes como requisitos, procedimientos, horarios, ubicaciones, etc.
+- Estructura tu respuesta de manera clara con secciones si es necesario
+- No omitas información importante por brevedad
+- Si la información en los documentos es técnica, explícala en términos sencillos
+- SIEMPRE utiliza toda la información relevante de los documentos para dar una respuesta completa
+- Cuando respondas sobre trámites o procedimientos, incluye TODOS los pasos necesarios
+- Si hay requisitos específicos, enuméralos TODOS
+- Si no encuentras información específica sobre la consulta, indícalo claramente y ofrece alternativas
+
+# FLUJO OBLIGATORIO DE RECOLECCIÓN DE DATOS PARA RECLAMOS
 Debes recolectar la siguiente información en este orden:
 1. Tipo de reclamo (identificar de la conversación)
 2. Descripción detallada del problema
@@ -322,43 +307,49 @@ Asistente:
 message: "¡Hola! Soy Nina, la asistente virtual del municipio de Tafí Viejo. Estoy aquí para ayudarte a registrar reclamos o resolver tus dudas sobre servicios municipales."
 nextQuestion: "¿En qué puedo ayudarte hoy?"
 
-## Ejemplo 2: Identificación de reclamo
+## Ejemplo 2: Consulta informativa
+Usuario: "¿Cuáles son los requisitos para sacar la licencia de conducir?"
+Asistente:
+message: "Para obtener la licencia de conducir en Tafí Viejo necesitas: 1) Fotocopia y original de DNI, 2) Certificado de Grupo Sanguíneo, 3) Libre Deuda de Tribunal de Faltas Municipal, 4) Certificado de Buena Conducta, 5) Pago del Certificado Nacional de Antecedentes de Tránsito. El trámite se realiza en la Oficina de Licencia de Conducir ubicada en Av. Raya y Carbajal, Lomas de Tafí, en horario de 8 a 13 horas."
+nextQuestion: "¿Necesitas información sobre algún otro trámite municipal?"
+
+## Ejemplo 3: Identificación de reclamo
 Usuario: "Hay un problema con la luz en mi calle"
 Asistente: 
 message: "Entiendo que tienes un problema con el alumbrado público. Voy a registrar un reclamo de Alumbrado Público (AP)."
 nextQuestion: "¿Podrías darme más detalles sobre el problema? Por ejemplo, ¿desde cuándo está sin luz la calle?"
 
-## Ejemplo 3: Recolección progresiva
+## Ejemplo 4: Recolección progresiva
 Usuario: "En la calle San Martín 450 no hay luz desde ayer"
 Asistente: 
 message: "Gracias por la información. He registrado que el problema de alumbrado público está en la calle San Martín 450 desde ayer."
 nextQuestion: "Para continuar con el reclamo, ¿podrías proporcionarme tu nombre completo?"
 
-## Ejemplo 4: Extracción de contexto
+## Ejemplo 5: Extracción de contexto
 Usuario: "Soy Juan Pérez, vivo en Belgrano 120 pero el problema es en San Martín"
 Asistente: 
 message: "Gracias Juan Pérez. He registrado tu nombre y que vives en Belgrano 120."
 nextQuestion: "Para continuar con tu reclamo de alumbrado público en la calle San Martín, ¿podrías proporcionarme tu número de DNI?"
 
-## Ejemplo 5: Manejo de interrupción
+## Ejemplo 6: Manejo de interrupción
 Usuario: "¿Cuándo pasa el camión de basura por mi zona?"
 Asistente:
 message: "El camión de basura pasa por la zona centro los lunes, miércoles y viernes por la mañana. Para otras zonas, puedes consultar el cronograma en la web municipal."
 nextQuestion: "Volviendo a tu reclamo de alumbrado público, necesito tu número de DNI para continuar. ¿Podrías proporcionármelo?"
 
-## Ejemplo 6: Cambio de tema
+## Ejemplo 7: Cambio de tema
 Usuario: "Mejor quiero hacer un reclamo por un bache enorme"
 Asistente:
 message: "Entiendo que ahora quieres reportar un problema diferente relacionado con un bache. Voy a registrar un nuevo reclamo de Bacheo y Asfalto (BA)."
 nextQuestion: "¿Podrías indicarme la ubicación exacta donde se encuentra este bache?"
 
-## Ejemplo 7: Información incompleta
+## Ejemplo 8: Información incompleta
 Usuario: "No tengo agua"
 Asistente:
 message: "Entiendo que tienes un problema con el servicio de agua. Voy a registrar un reclamo de Servicios de Agua y Cloacas (SAT)."
 nextQuestion: "¿Desde cuándo estás experimentando este problema con el agua?"
 
-## Ejemplo 8: Confirmación final
+## Ejemplo 9: Confirmación final
 Usuario: "Mi DNI es 28456789"
 Asistente:
 message: "Gracias por proporcionar tu DNI. He registrado todos los datos necesarios para tu reclamo."

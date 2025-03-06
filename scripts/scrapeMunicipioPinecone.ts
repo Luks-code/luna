@@ -1,164 +1,137 @@
-import * as puppeteer from 'puppeteer';
-import { OpenAI } from 'openai';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as crypto from 'crypto';
+import * as puppeteer from 'puppeteer';
 import * as dotenv from 'dotenv';
-import { ingestDocument } from '../src/rag/ingest';
+import { OpenAI } from 'openai';
+import { ingestDocument } from '../src/rag/ingestPinecone';
 
 // Cargar variables de entorno
 dotenv.config();
 
 // Configuración
 const MUNICIPAL_WEBSITE = 'https://www.tafiviejo.gob.ar';
-const MAX_PAGES = 50; // Límite de páginas para evitar scraping excesivo
-const MAX_DEPTH = 3; // Profundidad máxima de navegación
+const MAX_PAGES = 50;
+const MAX_DEPTH = 3;
 const OUTPUT_DIR = path.join(__dirname, '../data/documents/municipio');
 const PROCESSED_DIR = path.join(__dirname, '../data/documents/procesados');
 
-// Inicializar OpenAI
+// Cliente de OpenAI
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Conjunto para rastrear URLs ya visitadas
+// Cola de URLs a visitar
+const urlQueue: { url: string; depth: number }[] = [];
 const visitedUrls = new Set<string>();
-// Cola de URLs por visitar con su profundidad
-const urlQueue: Array<{url: string, depth: number}> = [];
 
 // Función para normalizar URLs
-function normalizeUrl(pageUrl: string): string {
-  // Convertir a URL absoluta
-  const absoluteUrl = new URL(pageUrl, MUNICIPAL_WEBSITE).href;
+function normalizeUrl(url: string): string {
   // Eliminar parámetros de consulta y fragmentos
-  return absoluteUrl.split('?')[0].split('#')[0];
+  return url.split('?')[0].split('#')[0];
 }
 
-// Función para verificar si una URL pertenece al dominio municipal
-function isInternalUrl(pageUrl: string): boolean {
-  try {
-    const urlObj = new URL(pageUrl, MUNICIPAL_WEBSITE);
-    return urlObj.hostname === new URL(MUNICIPAL_WEBSITE).hostname;
-  } catch (error) {
-    return false;
-  }
-}
-
-// Función para generar un nombre de archivo seguro basado en la URL
-function urlToFilename(pageUrl: string): string {
-  const urlPath = new URL(pageUrl).pathname;
-  // Crear un nombre basado en la ruta de la URL
-  let filename = urlPath.replace(/^\/|\/$/g, '').replace(/\//g, '_');
+// Función para convertir URL a nombre de archivo
+function urlToFilename(url: string): string {
+  // Eliminar protocolo y dominio
+  let filename = url.replace(/^https?:\/\//, '').replace(/^www\./, '');
   
-  // Si está vacío (página principal) o es demasiado largo, usar un hash
-  if (!filename || filename.length > 100) {
-    const hash = crypto.createHash('md5').update(pageUrl).digest('hex').substring(0, 8);
-    filename = filename ? `${filename.substring(0, 50)}_${hash}` : `home_${hash}`;
-  }
+  // Reemplazar caracteres no válidos para nombres de archivo
+  filename = filename.replace(/[\\/:*?"<>|]/g, '_');
   
-  return `${filename}.txt`;
+  // Añadir extensión
+  return filename + '.txt';
 }
 
-// Función para extraer metadatos de la página
-async function extractMetadata(page: puppeteer.Page): Promise<{title: string, category: string}> {
-  return page.evaluate(() => {
-    const title = document.title || 'Sin título';
-    
-    // Intentar determinar la categoría basada en la estructura de la página
-    let category = 'general';
-    
-    // Buscar palabras clave en la URL o título para categorizar
-    const pageUrl = window.location.pathname.toLowerCase();
-    const pageTitle = document.title.toLowerCase();
-    
-    const categoryKeywords: {[key: string]: string[]} = {
-      'tramites': ['tramite', 'tramites', 'procedimiento', 'solicitud'],
-      'servicios': ['servicio', 'servicios', 'prestacion'],
-      'contacto': ['contacto', 'contactenos', 'telefono', 'email', 'direccion'],
-      'noticias': ['noticia', 'noticias', 'novedad', 'novedades', 'actualidad'],
-      'impuestos': ['impuesto', 'impuestos', 'tasa', 'tasas', 'tributo', 'pago'],
-      'obras': ['obra', 'obras', 'infraestructura', 'construccion'],
-      'cultura': ['cultura', 'cultural', 'evento', 'eventos', 'teatro', 'museo'],
-      'turismo': ['turismo', 'turistico', 'visitar', 'atractivo'],
-      'salud': ['salud', 'hospital', 'clinica', 'medico', 'sanitario']
-    };
-    
-    // Determinar categoría basada en palabras clave
-    for (const [cat, keywords] of Object.entries(categoryKeywords)) {
-      if (keywords.some(keyword => pageUrl.includes(keyword) || pageTitle.includes(keyword))) {
-        category = cat;
-        break;
-      }
-    }
-    
-    return { title, category };
-  });
+// Función para determinar la categoría de una página
+function determineCategory(url: string, title: string, content: string): string {
+  // Categorías basadas en URL
+  if (url.includes('/tramites')) return 'tramites';
+  if (url.includes('/servicios')) return 'servicios';
+  if (url.includes('/contacto')) return 'contacto';
+  if (url.includes('/noticias') || url.includes('/noticia')) return 'noticias';
+  if (url.includes('/turismo')) return 'turismo';
+  if (url.includes('/cultura')) return 'cultura';
+  if (url.includes('/deporte')) return 'deporte';
+  if (url.includes('/salud')) return 'salud';
+  if (url.includes('/educacion')) return 'educacion';
+  if (url.includes('/institucional')) return 'institucional';
+  if (url.includes('/gobierno')) return 'gobierno';
+  
+  // Categorías basadas en título
+  const titleLower = title.toLowerCase();
+  if (titleLower.includes('trámite') || titleLower.includes('tramite')) return 'tramites';
+  if (titleLower.includes('servicio')) return 'servicios';
+  if (titleLower.includes('contacto')) return 'contacto';
+  if (titleLower.includes('noticia')) return 'noticias';
+  
+  // Categoría por defecto
+  return 'general';
 }
 
-// Función para scrapear una URL y extraer enlaces internos
-async function scrapePage(pageUrl: string, depth: number): Promise<{content: string, links: string[], metadata: any}> {
-  console.log(`[${depth}] Scrapeando ${pageUrl}...`);
-  
-  const browser = await puppeteer.launch({ headless: true });
-  const page = await browser.newPage();
+// Función para scrapear una página
+async function scrapePage(url: string, depth: number): Promise<{ content: string; links: string[]; metadata: any }> {
+  console.log(`[${depth}] Scrapeando ${url}...`);
   
   try {
-    await page.goto(pageUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+    const browser = await puppeteer.launch({
+      headless: true,
+    });
+    const page = await browser.newPage();
     
-    // Extraer metadatos
-    const metadata = await extractMetadata(page);
+    // Navegar a la URL
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
     
-    // Extraer el contenido principal
+    // Extraer contenido
     const content = await page.evaluate(() => {
-      // Intentar encontrar el contenido principal
-      const contentSelectors = [
-        'main', 
-        'article', 
-        '.content', 
-        '.main-content', 
-        '#content',
-        '.container'
-      ];
+      // Función para limpiar texto
+      const cleanText = (text: string) => {
+        return text
+          .replace(/\s+/g, ' ')
+          .replace(/\n+/g, '\n')
+          .trim();
+      };
       
-      let mainElement: Element | null = null;
-      for (const selector of contentSelectors) {
-        const element = document.querySelector(selector);
-        if (element && element.textContent && element.textContent.trim().length > 100) {
-          mainElement = element;
-          break;
-        }
-      }
-      
-      // Si no se encuentra un contenedor específico, usar el body
-      const contentElement = mainElement || document.body;
-      
-      // Eliminar elementos no deseados
-      const elementsToRemove = contentElement.querySelectorAll('nav, footer, header, script, style, .menu, .navigation, .sidebar, .footer, .header');
-      elementsToRemove.forEach(el => el.remove());
-      
-      return contentElement.textContent || '';
+      // Obtener el contenido principal
+      const mainContent = document.body.innerText;
+      return cleanText(mainContent);
     });
     
-    // Extraer todos los enlaces internos
+    // Extraer título
+    const title = await page.title();
+    
+    // Extraer enlaces internos
     const links = await page.evaluate((baseUrl) => {
-      const allLinks = Array.from(document.querySelectorAll('a[href]'))
+      const anchors = Array.from(document.querySelectorAll('a[href]'));
+      return anchors
         .map(a => a.getAttribute('href'))
-        .filter(href => href !== null && !href.startsWith('#') && !href.startsWith('javascript:') && !href.startsWith('mailto:') && !href.startsWith('tel:'))
-        .map(href => href as string); // Asegurar que href no es null
-      
-      // Convertir a URLs absolutas
-      return allLinks.map(href => new URL(href, window.location.href).href);
+        .filter(href => href && !href.startsWith('#') && !href.startsWith('javascript:'))
+        .map(href => {
+          if (href && href.startsWith('/')) {
+            return new URL(href, baseUrl).href;
+          }
+          return href;
+        })
+        .filter(href => href && href.startsWith(baseUrl));
     }, MUNICIPAL_WEBSITE);
     
-    // Filtrar solo enlaces internos
-    const internalLinks = links.filter(link => isInternalUrl(link)).map(link => normalizeUrl(link));
+    await browser.close();
     
-    await browser.close();
-    return { content, links: internalLinks, metadata };
+    // Determinar categoría
+    const category = determineCategory(url, title, content);
+    
+    return {
+      content,
+      links: links as string[],
+      metadata: {
+        title,
+        url,
+        category,
+        depth,
+      },
+    };
   } catch (error) {
-    console.error(`Error al scrapear ${pageUrl}:`, error);
-    await browser.close();
-    return { content: '', links: [], metadata: { title: 'Error', category: 'error' } };
+    console.error(`Error al scrapear ${url}:`, error);
+    return { content: '', links: [], metadata: {} };
   }
 }
 
@@ -232,14 +205,12 @@ ${responseContent}`;
   }
 }
 
-// Función para ingestar automáticamente un documento
+// Función para ingestar un documento procesado
 async function ingestProcessedDocument(filePath: string): Promise<boolean> {
   try {
-    console.log(`Ingiriendo documento: ${filePath}`);
-    const result = await ingestDocument(filePath);
-    return result;
+    return await ingestDocument(filePath);
   } catch (error) {
-    console.error(`Error al ingerir documento ${filePath}:`, error);
+    console.error(`Error al ingestar documento ${filePath}:`, error);
     return false;
   }
 }

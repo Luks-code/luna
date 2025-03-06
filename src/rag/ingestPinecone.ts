@@ -2,21 +2,29 @@ import { OpenAIEmbeddings } from '@langchain/openai';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as dotenv from 'dotenv';
-import { chromaClient, getCollection, COLLECTION_NAME } from './chromaClient';
+import { getIndex, PINECONE_INDEX_NAME } from './pineconeClient';
+import { v4 as uuidv4 } from 'uuid';
 
 dotenv.config();
 
 // Configuración
+const CHUNK_SIZE = 1000;
+const CHUNK_OVERLAP = 200;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 // Función para cargar un documento de texto
 async function loadTextDocument(filePath: string) {
-  const text = fs.readFileSync(filePath, 'utf-8');
-  return [{ pageContent: text, metadata: { source: filePath } }];
+  try {
+    const text = fs.readFileSync(filePath, 'utf-8');
+    return [{ pageContent: text, metadata: { source: filePath } }];
+  } catch (error) {
+    console.error(`Error al cargar el documento de texto: ${error}`);
+    return [];
+  }
 }
 
 // Función para dividir texto en chunks
-function splitTextIntoChunks(text: string, chunkSize: number = 1000, chunkOverlap: number = 200) {
+function splitTextIntoChunks(text: string, chunkSize: number = CHUNK_SIZE, chunkOverlap: number = CHUNK_OVERLAP) {
   const chunks = [];
   let startIndex = 0;
   
@@ -56,7 +64,7 @@ function splitTextIntoChunks(text: string, chunkSize: number = 1000, chunkOverla
 }
 
 // Función principal para ingestar documentos
-export async function ingestDocument(filePath: string) {
+export async function ingestDocument(filePath: string): Promise<boolean> {
   try {
     console.log(`Procesando documento: ${filePath}`);
     
@@ -78,27 +86,30 @@ export async function ingestDocument(filePath: string) {
       openAIApiKey: OPENAI_API_KEY,
     });
     
-    // 5. Obtener colección
-    const collection = await getCollection();
+    // 5. Obtener índice de Pinecone
+    const index = await getIndex();
     
     // 6. Procesar y añadir chunks
     for (let i = 0; i < chunks.length; i++) {
       const content = chunks[i];
       const metadata = {
         source: filePath,
-        chunk_id: `${path.basename(filePath)}_${i}`
+        chunk_id: `${path.basename(filePath)}_${i}`,
+        text: content
       };
       
       // Generar embedding
       const embedding = await embeddings.embedQuery(content);
       
-      // Añadir a ChromaDB
-      await collection.add({
-        ids: [`${path.basename(filePath).replace(/\s+/g, '_')}_${i}`],
-        embeddings: [embedding],
-        metadatas: [metadata],
-        documents: [content]
-      });
+      // Crear un ID único para este vector
+      const id = `${path.basename(filePath).replace(/\s+/g, '_')}_${i}`;
+      
+      // Añadir a Pinecone
+      await index.upsert([{
+        id: id,
+        values: embedding,
+        metadata: metadata
+      }]);
       
       console.log(`Añadido chunk ${i+1}/${chunks.length}`);
     }
@@ -115,7 +126,7 @@ export async function ingestDocument(filePath: string) {
 if (require.main === module) {
   const filePath = process.argv[2];
   if (!filePath) {
-    console.error('Por favor proporciona la ruta al documento: ts-node ingest.ts /ruta/al/documento.pdf');
+    console.error('Por favor proporciona la ruta al documento: ts-node ingestPinecone.ts /ruta/al/documento.pdf');
     process.exit(1);
   }
   

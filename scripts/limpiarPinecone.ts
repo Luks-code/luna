@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
-import { chromaClient, COLLECTION_NAME, embeddingFunction } from '../src/rag/chromaClient';
+import { pineconeClient, PINECONE_INDEX_NAME } from '../src/rag/pineconeClient';
 
 // Cargar variables de entorno
 dotenv.config();
@@ -34,38 +34,47 @@ function limpiarDirectorio(directorio: string): void {
   console.log(`Directorio ${directorio} limpiado exitosamente.`);
 }
 
-// Función para eliminar la colección de ChromaDB
-async function limpiarChromaDB(): Promise<void> {
+// Función para eliminar el índice de Pinecone
+async function limpiarPinecone(): Promise<void> {
   try {
-    console.log(`Eliminando colección ${COLLECTION_NAME} de ChromaDB...`);
+    console.log(`Eliminando índice ${PINECONE_INDEX_NAME} de Pinecone...`);
     
-    // Obtener el cliente de Chroma
-    const client = chromaClient;
+    // Obtener el cliente de Pinecone
+    const client = pineconeClient;
     
     try {
-      // Intentar eliminar la colección directamente
-      await client.deleteCollection({ name: COLLECTION_NAME });
-      console.log(`Colección ${COLLECTION_NAME} eliminada exitosamente.`);
+      // Verificar si el índice existe
+      const indexList = await client.listIndexes();
+      
+      // Verificar si el índice existe en la lista de índices
+      const indexExists = indexList.indexes?.some(index => index.name === PINECONE_INDEX_NAME);
+      
+      if (indexExists) {
+        // Eliminar el índice
+        await client.deleteIndex(PINECONE_INDEX_NAME);
+        console.log(`Índice ${PINECONE_INDEX_NAME} eliminado exitosamente.`);
+      } else {
+        console.log(`El índice ${PINECONE_INDEX_NAME} no existe.`);
+      }
     } catch (error) {
-      // Si hay un error, probablemente la colección no existe
-      console.log(`La colección ${COLLECTION_NAME} no existe o no se pudo eliminar: ${error}`);
+      console.log(`Error al eliminar el índice de Pinecone: ${error}`);
     }
   } catch (error) {
-    console.error('Error al limpiar ChromaDB:', error);
+    console.error('Error al limpiar Pinecone:', error);
   }
 }
 
 // Función principal
 async function main() {
   try {
-    console.log('Iniciando limpieza del sistema RAG...');
+    console.log('Iniciando limpieza del sistema RAG con Pinecone...');
     
     // 1. Limpiar directorios de documentos
     limpiarDirectorio(MUNICIPIO_DIR);
     limpiarDirectorio(PROCESADOS_DIR);
     
-    // 2. Limpiar ChromaDB
-    await limpiarChromaDB();
+    // 2. Limpiar Pinecone
+    await limpiarPinecone();
     
     console.log('Limpieza del sistema RAG completada exitosamente.');
     console.log('Ahora puedes ejecutar el script de scraping mejorado para ingestar solo información relevante.');

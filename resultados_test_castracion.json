@@ -1,0 +1,66 @@
+{
+  "initialQueries": [
+    {
+      "query": "¿Dónde puedo llevar a mi perro para castrarlo?",
+      "isComplaint": false,
+      "intent": "INQUIRY",
+      "message": "Para castrar a tu perro, puedes llevarlo al Departamento de Zoonosis de la Municipalidad de Tafí Viejo. Ellos ofrecen el servicio de castración de mascotas de forma gratuita. Te recomendaría que te comuniques con el Departamento de Zoonosis para obtener más detalles sobre los horarios de atención y los requisitos necesarios para realizar el procedimiento. Lamentablemente, no tengo información específica sobre los requisitos para la castración de mascotas en este momento.",
+      "nextQuestion": "¿Necesitas información adicional sobre otro trámite o servicio?"
+    },
+    {
+      "query": "Cómo se llama el centro para castrar a mi perrito?",
+      "isComplaint": false,
+      "intent": "INQUIRY",
+      "message": "El centro para castrar a tu perrito se llama CEPSA. Está ubicado en la intersección de la calle Martín Blanco y avenida Raya, Lomas de Tafí. El horario de atención es de lunes a viernes de 8:00 a 12:00. Los turnos se otorgan de manera presencial todos los viernes. Para más información, se recomienda visitar la página oficial del municipio o acudir directamente al centro.",
+      "nextQuestion": "¿Puedo ayudarte con algo más?"
+    },
+    {
+      "query": "Necesito castrar a mi gato, ¿dónde puedo hacerlo?",
+      "isComplaint": false,
+      "intent": "INQUIRY",
+      "message": "Puedes llevar a castrar a tu gato al Centro de Salud Animal San Francisco de Asís, ubicado en Lomas de Tafí. Debes presentarte en el centro para solicitar un turno y llevar el consentimiento firmado por el responsable de la mascota. Recuerda que el animal debe tener un ayuno de 12 horas, las hembras no deben estar en celo ni en periodo de gestación, y las edades para realizar las operaciones deben estar comprendidas entre los 6 meses y 7 años, tanto para caninos como para felinos.",
+      "nextQuestion": "¿Necesitas información adicional sobre este trámite?"
+    },
+    {
+      "query": "¿Cuál es el nombre del lugar donde hacen castraciones?",
+      "isComplaint": false,
+      "intent": "INQUIRY",
+      "message": "No tengo el nombre exacto de esa institución.",
+      "nextQuestion": "¿Necesitas información sobre algún otro servicio o trámite municipal?"
+    }
+  ],
+  "followUpQueries": [
+    {
+      "originalQuery": "¿Dónde puedo llevar a mi perro para castrarlo?",
+      "followUpQuery": "¿Qué requisitos necesito?",
+      "isComplaint": false,
+      "intent": "INQUIRY",
+      "message": "No tengo información sobre qué requisitos necesitas en este momento. Te recomendaría que te comuniques directamente con el Departamento de Zoonosis de la Municipalidad de Tafí Viejo para obtener detalles específicos sobre los requisitos necesarios para castrar a tu perro. Puedes contactarlos por teléfono al 381-444-4444 o por correo electrónico a zoonosis@tafiviejo.gob.ar.",
+      "nextQuestion": "¿Necesitas información adicional sobre otro trámite o servicio?"
+    },
+    {
+      "originalQuery": "Cómo se llama el centro para castrar a mi perrito?",
+      "followUpQuery": "¿Qué requisitos necesito?",
+      "isComplaint": false,
+      "intent": "INQUIRY",
+      "message": "Los requisitos necesarios para acceder al servicio del Departamento de Discapacidad en Lomas de Tafí no han sido especificados en el documento. Te recomendaría acercarte a la oficina del departamento para obtener información detallada sobre los requisitos necesarios.",
+      "nextQuestion": "¿Necesitas información sobre algún otro trámite o servicio municipal?"
+    },
+    {
+      "originalQuery": "Necesito castrar a mi gato, ¿dónde puedo hacerlo?",
+      "followUpQuery": "¿Qué requisitos necesito?",
+      "isComplaint": false,
+      "intent": "INQUIRY",
+      "message": "Los requisitos necesarios para castrar a tu mascota en el Centro de Salud Animal San Francisco de Asís son: 1) Consentimiento firmado por el responsable de la mascota, 2) El animal debe tener un ayuno de 12 horas (sin alimentos sólidos ni líquidos), 3) Las hembras no deben estar en celo ni en periodo de gestación, 4) Las edades para realizar las operaciones deben estar comprendidas entre los 6 meses y 7 años, tanto para caninos como para felinos.",
+      "nextQuestion": "¿Puedo ayudarte con algo más?"
+    },
+    {
+      "originalQuery": "¿Cuál es el nombre del lugar donde hacen castraciones?",
+      "followUpQuery": "¿Qué requisitos necesito?",
+      "isComplaint": false,
+      "intent": "INQUIRY",
+      "message": "Los requisitos para la renovación de la licencia de conducir para la categoría 'A' (motocicleta) son: 1) Fotocopia y original de DNI, 2) Licencia de conducir a renovar, 3) Libre Deuda de Tribunal de Faltas Municipal, 4) Certificado de Buena Conducta, 5) Saber leer, 6) Pago del Ce.N.A.T, 7) Certificado Médico y electrocardiograma para mayores de 60 años, 8) Certificado de Legalidad y DNI con cambio de domicilio para licencias de otros municipios, 9) Denuncia policial en caso de extravío, 10) Curso teórico/práctico si el vencimiento es mayor a 60 días. Para la categoría 'B' (automóvil) los requisitos son similares. Los pasos a seguir incluyen: 1) Control de documentación e inicio de trámite, 2) Carga de datos y fotografía, 3) Examen psicofísico, 4) Examen teórico/práctico si corresponde, 5) Entrega de licencia.",
+      "nextQuestion": "¿Necesitas información adicional sobre algún otro trámite o servicio?"
+    }
+  ]
+}

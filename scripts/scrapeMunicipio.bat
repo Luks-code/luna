@@ -6,7 +6,7 @@ echo Instalando dependencias necesarias...
 npm install puppeteer openai
 
 echo Ejecutando script de scraping...
-npx ts-node scripts/scrapeMunicipio.ts
+npx ts-node scripts/scrapeMunicipioPinecone.ts
 
 if %ERRORLEVEL% NEQ 0 (
   echo Error al ejecutar el script de scraping
