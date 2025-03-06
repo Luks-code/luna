@@ -4,7 +4,10 @@
   "main": "index.js",
   "scripts": {
     "start-bot": "npx ts-node src/index.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "postinstall": "prisma generate"
   },
   "keywords": [],
   "author": "",
@@ -33,5 +36,8 @@
     "jest": "^29.7.0",
     "prisma": "^6.4.1",
     "ts-jest": "^29.2.6"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
