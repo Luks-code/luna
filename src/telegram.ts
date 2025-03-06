@@ -1,5 +1,5 @@
 import { Telegraf } from "telegraf";
-import generateText from "./textGenerator";
+import { generateText } from "./textGenerator";
 
 const bot = new Telegraf(process.env.TELEGRAM_TOKEN!);
 

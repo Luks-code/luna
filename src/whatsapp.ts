@@ -339,8 +339,22 @@ async function processMessage(from: string, message: string, conversationState?:
     const questionLowerCase = response.nextQuestion.toLowerCase();
     const messageLowerCase = responseMessage.toLowerCase();
     
-    // Solo añadir la pregunta si no está ya incluida en el mensaje
-    if (!messageLowerCase.includes(questionLowerCase)) {
+    // Función para detectar similitud entre textos
+    const detectSimilarity = (text1: string, text2: string): boolean => {
+      // Dividir en palabras
+      const words1 = text1.split(/\s+/).filter(w => w.length > 3); // Solo palabras significativas
+      const words2 = text2.split(/\s+/).filter(w => w.length > 3);
+      
+      // Contar palabras comunes
+      const commonWords = words1.filter(word => words2.includes(word));
+      
+      // Si hay más de 3 palabras en común o más del 50% de palabras en común, considerar similar
+      return commonWords.length > 3 || 
+             (words1.length > 0 && commonWords.length / words1.length > 0.5);
+    };
+    
+    // Solo añadir la pregunta si no está ya incluida en el mensaje y no es similar
+    if (!messageLowerCase.includes(questionLowerCase) && !detectSimilarity(questionLowerCase, messageLowerCase)) {
       responseMessage += '\n\n' + response.nextQuestion;
     } else {
       console.log('Evitada duplicación de pregunta:', response.nextQuestion);

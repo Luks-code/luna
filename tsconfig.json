@@ -3,8 +3,12 @@
     "target": "es2017",
     "module": "commonjs",
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": ".",
     "strict": true,
     "esModuleInterop": true
-  }
+  },
+  "include": [
+    "src/**/*",
+    "scripts/**/*"
+  ]
 }
