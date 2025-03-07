@@ -8,6 +8,7 @@ import {
   initialConversationState,
   getMessageHistory,
   addMessageToHistory,
+  deleteConversation,
   redis
 } from './redis';
 import { handleCommand } from './commands';
@@ -104,46 +105,43 @@ export function setupWhatsAppWebhook(app: Express) {
       // Obtener el historial de mensajes
       const messageHistory = await getMessageHistory(from);
 
-      // Añadir el mensaje del usuario al historial
-      await addMessageToHistory(from, 'user', userText);
-
       // Manejar comandos especiales
       if (userText.startsWith('/')) {
         const commandText = userText.substring(1);
-        // Añadir el comando al historial
+        // Añadir el comando al historial (solo una vez)
         await addMessageToHistory(from, 'user', userText);
         await handleCommand(from, commandText, conversationState);
         return;
       }
 
+      // Añadir el mensaje del usuario al historial (solo una vez)
+      await addMessageToHistory(from, 'user', userText);
+
       // Manejar confirmación si está pendiente
-      if (conversationState.awaitingConfirmation) {
+      if (conversationState.awaitingConfirmation || conversationState.confirmationRequested) {
         const upperText = userText.toUpperCase();
         if (upperText === 'CONFIRMAR') {
           // Guardar el reclamo y reiniciar el estado
           await saveComplaint(from, conversationState.complaintData);
           
           // Asegurarse de que el estado se ha reiniciado completamente
-          await setConversationState(from, {
-            ...initialConversationState,
-            isComplaintInProgress: false,
-            awaitingConfirmation: false,
-            complaintData: {}
-          });
+          await deleteConversation(from);
           
           return;
         } else if (upperText === 'CANCELAR') {
-          // Reiniciar el estado
-          await setConversationState(from, {
-            ...initialConversationState,
-            isComplaintInProgress: false,
-            awaitingConfirmation: false,
-            complaintData: {}
-          });
-          
-          const cancelMessage = 'Reclamo cancelado. ¿Puedo ayudarte en algo más?';
+          // Mensaje de cancelación
+          const cancelMessage = 'Reclamo cancelado.';
           await sendWhatsAppMessage(from, cancelMessage);
           await addMessageToHistory(from, 'assistant', cancelMessage);
+          
+          // Mensaje de reinicio
+          const resetMessage = 'La conversación ha sido reiniciada.';
+          await sendWhatsAppMessage(from, resetMessage);
+          
+          // Eliminar completamente la conversación
+          const deleted = await deleteConversation(from);
+          console.log(`Conversación eliminada: ${deleted ? 'Sí' : 'No'}`);
+          
           return;
         } else {
           const promptMessage = 'Por favor, responde "CONFIRMAR" para guardar el reclamo o "CANCELAR" para descartarlo.';
@@ -151,6 +149,26 @@ export function setupWhatsAppWebhook(app: Express) {
           await addMessageToHistory(from, 'assistant', promptMessage);
           return;
         }
+      }
+      
+      // Detectar intenciones de cancelación en mensajes normales cuando hay un reclamo en progreso
+      if (conversationState.isComplaintInProgress && detectCancellationIntent(userText)) {
+        console.log('Intención de cancelación detectada en mensaje normal');
+        
+        // Mensaje de cancelación
+        const cancelMessage = 'He detectado que deseas cancelar el reclamo actual.';
+        await sendWhatsAppMessage(from, cancelMessage);
+        await addMessageToHistory(from, 'assistant', cancelMessage);
+        
+        // Mensaje de reinicio
+        const resetMessage = 'La conversación ha sido reiniciada.';
+        await sendWhatsAppMessage(from, resetMessage);
+        
+        // Eliminar completamente la conversación
+        const deleted = await deleteConversation(from);
+        console.log(`Conversación eliminada: ${deleted ? 'Sí' : 'No'}`);
+        
+        return;
       }
 
       // Procesar mensaje
@@ -199,6 +217,23 @@ export async function webhook(req: Request, res: Response) {
   }
 }
 
+// Función para detectar intenciones de cancelación en mensajes normales
+function detectCancellationIntent(message: string): boolean {
+  const cancellationPatterns = [
+    /\b(cancelar|anular|detener|parar|suspender|abandonar)\s+(el|este|mi|todo|reclamo|queja|proceso|trámite)\b/i,
+    /\b(no|ya no)\s+(quiero|deseo|necesito)\s+(seguir|continuar|hacer|presentar|registrar)\s+(el|este|mi|un|reclamo|queja)\b/i,
+    /\b(olvidar|olvidemos|dejar|dejemos)\s+(el|este|mi|todo|reclamo|queja|proceso|trámite)\b/i,
+    /\b(mejor|prefiero)\s+(no|cancelar|anular|olvidar|dejar)\s+(el|este|mi|todo|reclamo|queja|proceso|trámite)\b/i,
+    /\b(quiero|deseo|necesito)\s+(cancelar|anular|detener|parar|suspender|abandonar)\s+(el|este|mi|todo|reclamo|queja|proceso|trámite)\b/i,
+    /\b(cancelar|anular|detener|parar|suspender|abandonar)\s+todo\b/i,
+    /\bdejalo\s+(así|asi)\b/i,
+    /\bno\s+importa\s+(ya|más|mas)\b/i,
+    /\bolvida(lo|r)\s+(todo|el reclamo|la queja|el proceso|el trámite)\b/i
+  ];
+  
+  return cancellationPatterns.some(pattern => pattern.test(message));
+}
+
 async function processMessage(from: string, message: string, conversationState?: any, messageHistory?: any) {
   // Verificar si es un comando
   if (message.startsWith('/')) {
@@ -209,7 +244,7 @@ async function processMessage(from: string, message: string, conversationState?:
         conversationState = initialConversationState;
       }
     }
-    return await handleCommand(from, message, conversationState);
+    return await handleCommand(from, message.substring(1), conversationState);
   }
 
   // Obtener el estado actual de la conversación si no se proporcionó
@@ -223,11 +258,12 @@ async function processMessage(from: string, message: string, conversationState?:
   // Actualizar timestamp de última interacción
   conversationState.lastInteractionTimestamp = Date.now();
 
-  // Añadir mensaje al historial
-  await addMessageToHistory(from, 'user', message);
-
-  // Obtener historial de mensajes si no se proporcionó
+  // Añadir mensaje al historial SOLO si no fue llamado desde el webhook
+  // que ya lo añadió previamente
   if (!messageHistory) {
+    // Si no se proporcionó historial, asumimos que esta función fue llamada directamente
+    // y necesitamos añadir el mensaje al historial
+    await addMessageToHistory(from, 'user', message);
     messageHistory = await getMessageHistory(from);
   }
 
@@ -252,7 +288,6 @@ async function processMessage(from: string, message: string, conversationState?:
       conversationState.interruptedFlow = true;
       conversationState.interruptionContext = {
         originalIntent: IntentType.COMPLAINT,
-        pendingQuestion: response.nextQuestion,
         resumePoint: conversationState.currentStep
       };
     }
@@ -333,34 +368,6 @@ async function processMessage(from: string, message: string, conversationState?:
     responseMessage += "\n\nVolvamos a tu reclamo anterior. ";
   }
   
-  // Añadir la pregunta al final, evitando duplicación
-  if (response.nextQuestion) {
-    // Verificar si la pregunta ya está incluida en el mensaje
-    const questionLowerCase = response.nextQuestion.toLowerCase();
-    const messageLowerCase = responseMessage.toLowerCase();
-    
-    // Función para detectar similitud entre textos
-    const detectSimilarity = (text1: string, text2: string): boolean => {
-      // Dividir en palabras
-      const words1 = text1.split(/\s+/).filter(w => w.length > 3); // Solo palabras significativas
-      const words2 = text2.split(/\s+/).filter(w => w.length > 3);
-      
-      // Contar palabras comunes
-      const commonWords = words1.filter(word => words2.includes(word));
-      
-      // Si hay más de 3 palabras en común o más del 50% de palabras en común, considerar similar
-      return commonWords.length > 3 || 
-             (words1.length > 0 && commonWords.length / words1.length > 0.5);
-    };
-    
-    // Solo añadir la pregunta si no está ya incluida en el mensaje y no es similar
-    if (!messageLowerCase.includes(questionLowerCase) && !detectSimilarity(questionLowerCase, messageLowerCase)) {
-      responseMessage += '\n\n' + response.nextQuestion;
-    } else {
-      console.log('Evitada duplicación de pregunta:', response.nextQuestion);
-    }
-  }
-
   // Enviar respuesta
   await sendWhatsAppMessage(from, responseMessage);
 
@@ -368,20 +375,35 @@ async function processMessage(from: string, message: string, conversationState?:
   await addMessageToHistory(from, 'assistant', responseMessage);
 
   // Si el estado es de confirmación, verificar si podemos guardar
-  if (conversationState.awaitingConfirmation && isReadyToSave(conversationState.complaintData)) {
+  if ((conversationState.awaitingConfirmation || conversationState.confirmationRequested) && isReadyToSave(conversationState.complaintData)) {
     conversationState.confirmedData = conversationState.complaintData;
+    // Asegurar que ambos flags estén sincronizados
+    conversationState.awaitingConfirmation = true;
+    conversationState.confirmationRequested = true;
     await setConversationState(from, conversationState);
   }
 }
 
 async function saveComplaint(from: string, complaintData: any) {
   try {
+    console.log('Intentando guardar reclamo con datos:', JSON.stringify(complaintData, null, 2));
+    
+    if (!complaintData?.citizenData?.name || !complaintData?.citizenData?.documentId) {
+      throw new Error('Datos de ciudadano incompletos');
+    }
+    
     const citizen = await findOrCreateCitizen({
       name: complaintData.citizenData.name,
       documentId: complaintData.citizenData.documentId,
       phone: from,
-      address: complaintData.citizenData.address
+      address: complaintData.citizenData.address || 'No especificada'
     });
+
+    console.log('Ciudadano encontrado/creado:', citizen);
+
+    if (!complaintData.type || !complaintData.description || !complaintData.location) {
+      throw new Error('Datos del reclamo incompletos');
+    }
 
     const complaint = await createComplaint({
       type: complaintData.type,
@@ -390,19 +412,41 @@ async function saveComplaint(from: string, complaintData: any) {
       citizenId: citizen.id
     });
 
+    console.log('Reclamo creado:', complaint);
+
     // Crear el mensaje de confirmación
     const confirmationMessage = `✅ Reclamo registrado exitosamente!\nNúmero de reclamo: #${complaint.id}\nTipo: ${complaint.type}\nEstado: Pendiente de revisión`;
     
     await sendWhatsAppMessage(from, confirmationMessage);
+    await addMessageToHistory(from, 'assistant', confirmationMessage);
 
     await sendWhatsAppMessage(from, "La conversación será reiniciada.");
+    await addMessageToHistory(from, 'assistant', "La conversación será reiniciada.");
 
-    await redis.del(`conversation:${from}`);
+    // Eliminar completamente la conversación
+    const deleted = await deleteConversation(from);
+    console.log(`Conversación eliminada después de guardar reclamo: ${deleted ? 'Sí' : 'No'}`);
 
+    return true;
   } catch (error) {
     console.error('Error al guardar reclamo:', error);
-    const errorMessage = 'Lo siento, ocurrió un error al guardar tu reclamo. Por favor, intenta nuevamente.';
+    
+    let errorMessage = 'Lo siento, ocurrió un error al guardar tu reclamo.';
+    
+    // Personalizar mensaje según el tipo de error
+    if (error instanceof Error) {
+      if (error.message.includes('Datos de ciudadano incompletos')) {
+        errorMessage = 'No se pudo guardar el reclamo porque faltan datos personales. Por favor, proporciona tu nombre completo y número de documento.';
+      } else if (error.message.includes('Datos del reclamo incompletos')) {
+        errorMessage = 'No se pudo guardar el reclamo porque faltan datos del problema. Por favor, proporciona el tipo, descripción y ubicación del problema.';
+      } else if (error.message.includes('Unique constraint failed')) {
+        errorMessage = 'Hubo un problema con tus datos de contacto. Por favor, intenta nuevamente o contacta con soporte técnico.';
+      }
+    }
+    
     await sendWhatsAppMessage(from, errorMessage);
     await addMessageToHistory(from, 'assistant', errorMessage);
+    
+    return false;
   }
 }

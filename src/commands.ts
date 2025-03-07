@@ -1,5 +1,5 @@
 import { Command, COMMANDS, ComplaintStatus, ConversationState } from './types';
-import { setConversationState, initialConversationState, addMessageToHistory } from './redis';
+import { setConversationState, initialConversationState, addMessageToHistory, redis, deleteConversation } from './redis';
 import { sendWhatsAppMessage } from './whatsapp';
 import { prisma } from './prisma';
 
@@ -48,13 +48,22 @@ async function handleCancel(from: string, state: ConversationState): Promise<voi
   
   if (!state.isComplaintInProgress) {
     message = 'No hay ninguna operación en curso para cancelar.';
+    await sendWhatsAppMessage(from, message);
+    await addMessageToHistory(from, 'assistant', message);
   } else {
-    await setConversationState(from, initialConversationState);
-    message = 'Se ha cancelado el reclamo en curso. Puedes iniciar uno nuevo cuando quieras.';
+    // Mensaje de cancelación
+    message = 'Se ha cancelado el reclamo en curso.';
+    await sendWhatsAppMessage(from, message);
+    await addMessageToHistory(from, 'assistant', message);
+    
+    // Mensaje de reinicio
+    const resetMessage = 'La conversación ha sido reiniciada completamente.';
+    await sendWhatsAppMessage(from, resetMessage);
+    
+    // Eliminar completamente la conversación usando la nueva función
+    const deleted = await deleteConversation(from);
+    console.log(`[Comando /cancelar] Conversación eliminada: ${deleted ? 'Sí' : 'No'}`);
   }
-  
-  await sendWhatsAppMessage(from, message);
-  await addMessageToHistory(from, 'assistant', message);
 }
 
 async function handleHelp(from: string): Promise<void> {
@@ -94,11 +103,14 @@ ${complaintData.citizenData?.address ? `✅ Dirección: ${complaintData.citizenD
 }
 
 async function handleReset(from: string): Promise<void> {
-  const message = 'La conversación ha sido reiniciada. ¿En qué puedo ayudarte?';
+  const message = 'La conversación ha sido reiniciada completamente. ¿En qué puedo ayudarte?';
   
-  await setConversationState(from, initialConversationState);
+  // Eliminar completamente la conversación de Redis usando la nueva función
+  const deleted = await deleteConversation(from);
+  console.log(`[Comando /reiniciar] Conversación eliminada: ${deleted ? 'Sí' : 'No'}`);
+  
+  // Enviar mensaje de confirmación
   await sendWhatsAppMessage(from, message);
-  await addMessageToHistory(from, 'assistant', message);
 }
 
 async function handleConfirm(from: string, state: ConversationState): Promise<void> {

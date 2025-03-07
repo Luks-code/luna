@@ -41,8 +41,11 @@ export async function queryDocuments(query: string, topK: number = MAX_RESULTS):
       metadata: match.metadata || {},
     }));
     
+    // Aplicar reranking para mejorar la relevancia
+    const rerankedResults = await rerankResults(results, processedQuery);
+    
     // Filtrar y ordenar resultados por relevancia
-    results = filterAndRankResults(results, processedQuery);
+    results = filterAndRankResults(rerankedResults, processedQuery);
     
     // Limitar a topK resultados
     results = results.slice(0, topK);
@@ -141,6 +144,70 @@ function preprocessQuery(query: string): string {
   }
   
   return enhancedQuery;
+}
+
+// Función para reordenar los resultados basados en relevancia contextual
+async function rerankResults(results: any[], query: string): Promise<any[]> {
+  if (results.length <= 1) {
+    return results; // No hay necesidad de reordenar si hay 0 o 1 resultado
+  }
+
+  console.log('[RAG] Aplicando reranking a los resultados...');
+  
+  try {
+    // Factores para ajustar la puntuación
+    const titleMatchBoost = 0.15;
+    const keywordMatchBoost = 0.1;
+    const lengthPenalty = 0.05;
+    
+    // Extraer palabras clave de la consulta (excluyendo palabras comunes)
+    const stopWords = ['el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas', 'y', 'o', 'de', 'del', 'a', 'para', 'por', 'con', 'en', 'que', 'es', 'son'];
+    const queryWords = query.toLowerCase()
+      .replace(/[.,?¿!¡;:()\[\]{}""'']/g, '')
+      .split(/\s+/)
+      .filter(word => word.length > 2 && !stopWords.includes(word));
+    
+    // Reordenar resultados
+    const rerankedResults = results.map(result => {
+      let adjustedScore = result.score;
+      const lowerText = result.text.toLowerCase();
+      const metadata = result.metadata || {};
+      
+      // Boost por coincidencia en título/fuente
+      if (result.source) {
+        const source = result.source.toLowerCase();
+        if (queryWords.some(word => source.includes(word))) {
+          adjustedScore += titleMatchBoost;
+        }
+      }
+      
+      // Boost por coincidencia de palabras clave
+      const keywordMatches = queryWords.filter(word => lowerText.includes(word)).length;
+      const keywordMatchRatio = keywordMatches / queryWords.length;
+      adjustedScore += keywordMatchRatio * keywordMatchBoost;
+      
+      // Penalización por longitud excesiva (favorece respuestas concisas)
+      if (result.text.length > 1000) {
+        adjustedScore -= lengthPenalty;
+      }
+      
+      return {
+        ...result,
+        score: adjustedScore,
+        originalScore: result.score // Mantener la puntuación original para referencia
+      };
+    });
+    
+    // Ordenar por puntuación ajustada
+    rerankedResults.sort((a, b) => b.score - a.score);
+    
+    console.log(`[RAG] Reranking completado. Primer resultado score: ${rerankedResults[0].score.toFixed(3)} (original: ${rerankedResults[0].originalScore?.toFixed(3)})`);
+    
+    return rerankedResults;
+  } catch (error) {
+    console.error('[RAG] Error en reranking:', error);
+    return results; // En caso de error, devolver los resultados originales
+  }
 }
 
 // Función para filtrar y ordenar resultados por relevancia

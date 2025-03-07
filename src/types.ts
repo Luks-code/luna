@@ -2,6 +2,10 @@
 export interface GPTResponse {
   isComplaint: boolean;
   data?: ComplaintData;
+  /**
+   * @deprecated Este campo será eliminado en futuras versiones. 
+   * Incluir la pregunta directamente al final del campo message.
+   */
   nextQuestion?: string;
   message: string;
 }
@@ -55,6 +59,7 @@ export interface ConversationState {
     pendingQuestion?: string;
     resumePoint?: string;
   };
+  confirmationRequested?: boolean; // Nuevo campo para rastrear si se ha solicitado confirmación
 }
 
 // Tipos de intención

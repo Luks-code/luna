@@ -57,7 +57,9 @@ async function callOpenAI(prompt: string): Promise<GPTResponse> {
       messages: apiMessages,
       response_format: { type: 'json_object' },
       max_tokens: 10000,
-      temperature: 0.3,
+      temperature: 0.4,  // Ligero aumento para mejorar completitud
+      presence_penalty: 0.1,  // Añadir para evitar repeticiones
+      frequency_penalty: 0.1,  // Añadir para mejorar diversidad
     });
 
     // Parsear y devolver la respuesta
@@ -139,7 +141,7 @@ ${JSON.stringify(conversationState, null, 2)}
 ### Mensaje del usuario:
 ${message}
 
-### Respuesta:`;
+### Genera una respuesta:`;
     
     // 6. Llamar a la API de OpenAI con el contexto enriquecido
     const response = await callOpenAI(fullPrompt);
@@ -154,14 +156,189 @@ ${message}
   }
 }
 
-// Función para generar respuesta estándar (sin RAG)
-async function generateStandardResponse(message: string, conversationState: ConversationState, messageHistory: ConversationMessage[]): Promise<GPTResponse> {
-  const systemPromptStandard = getSystemPrompt(conversationState);
-  const prompt = `${systemPromptStandard}\n\n### Historial de conversación:\n${formatMessageHistory(messageHistory)}\n\n### Estado actual:\n${JSON.stringify(conversationState, null, 2)}\n\n### Mensaje del usuario:\n${message}\n\n### Respuesta:`;
+// Función para verificar si todos los datos del reclamo están completos
+function isComplaintDataComplete(state: ConversationState): boolean {
+  if (!state.isComplaintInProgress || !state.complaintData) {
+    return false;
+  }
+  
+  const data = state.complaintData;
+  return !!(
+    data.type && 
+    data.description && 
+    data.location && 
+    data.citizenData?.name && 
+    data.citizenData?.documentId && 
+    data.citizenData?.address
+  );
+}
+
+// Función para verificar si se ha solicitado confirmación
+function hasRequestedConfirmation(state: ConversationState): boolean {
+  return !!state.confirmationRequested;
+}
+
+// Función para generar respuesta estándar
+async function generateStandardResponse(message: string, state: ConversationState, history: ConversationMessage[]): Promise<GPTResponse> {
+  console.log('[Luna] Generando respuesta estándar');
+  
+  // Verificar si todos los datos del reclamo están completos y no se ha solicitado confirmación aún
+  const complaintComplete = isComplaintDataComplete(state);
+  const confirmationRequested = hasRequestedConfirmation(state);
+  
+  // Detectar si hay múltiples reclamos en el mensaje
+  const hasMultipleComplaints = detectMultipleComplaints(message);
+  
+  // Si se detectan múltiples reclamos y no hay uno en progreso, informar al usuario
+  if (hasMultipleComplaints && !state.isComplaintInProgress) {
+    console.log('[Luna] Múltiples reclamos detectados, solicitando al usuario que los procese uno por uno');
+    
+    return {
+      isComplaint: true,
+      message: "He detectado que mencionas varios problemas diferentes. Para poder ayudarte mejor, necesito que procesemos un reclamo a la vez. Por favor, indícame cuál de los problemas mencionados te gustaría registrar primero. ¿Cuál es el problema principal que deseas reportar en este momento?",
+      data: {
+        type: "MULTIPLE"
+      }
+    };
+  }
+  
+  // Si el reclamo está completo y no se ha solicitado confirmación, forzar la solicitud
+  if (complaintComplete && !confirmationRequested && !message.toLowerCase().includes('confirmar') && !message.toLowerCase().includes('cancelar')) {
+    console.log('[Luna] Reclamo completo detectado, solicitando confirmación explícita');
+    
+    // Crear un resumen de los datos del reclamo
+    const complaintData = state.complaintData!;
+    const complaintSummary = `
+Tipo de reclamo: ${complaintData.type}
+Descripción: ${complaintData.description}
+Ubicación: ${complaintData.location}
+Nombre: ${complaintData.citizenData?.name}
+DNI: ${complaintData.citizenData?.documentId}
+Dirección: ${complaintData.citizenData?.address}
+    `;
+    
+    // Actualizar el estado para indicar que se ha solicitado confirmación
+    state.confirmationRequested = true;
+    state.awaitingConfirmation = true; // Sincronizar ambos flags
+    
+    // Devolver una respuesta que solicite confirmación explícita
+    return {
+      isComplaint: true,
+      message: `He recopilado todos los datos necesarios para tu reclamo. Aquí está el resumen:\n${complaintSummary.trim()}\n\nPara continuar, necesito tu confirmación explícita. Por favor, escribe CONFIRMAR para guardar el reclamo o CANCELAR para descartarlo.`,
+      data: state.complaintData
+    };
+  }
+  
+  // Si el mensaje es "CONFIRMAR" y todos los datos están completos
+  if (message.toLowerCase() === 'confirmar' && complaintComplete) {
+    console.log('[Luna] Confirmación recibida para reclamo completo');
+    
+    // Aquí se procesaría el guardado del reclamo (en la implementación actual esto lo maneja otro componente)
+    
+    // Resetear el estado de confirmación para futuros reclamos
+    state.confirmationRequested = false;
+    state.awaitingConfirmation = false; // Sincronizar ambos flags
+    
+    return {
+      isComplaint: true,
+      message: "¡Gracias! Tu reclamo ha sido registrado exitosamente. Te notificaremos cuando haya novedades. ¿Hay algo más en lo que pueda ayudarte?",
+      data: state.complaintData
+    };
+  }
+  
+  // Si el mensaje es "CANCELAR" y se había solicitado confirmación
+  if (message.toLowerCase() === 'cancelar' && confirmationRequested) {
+    console.log('[Luna] Cancelación recibida para reclamo');
+    
+    // Resetear el estado de confirmación
+    state.confirmationRequested = false;
+    state.awaitingConfirmation = false; // Sincronizar ambos flags
+    
+    return {
+      isComplaint: false,
+      message: "He cancelado el registro del reclamo. Todos los datos ingresados han sido descartados. ¿Puedo ayudarte con algo más?"
+    };
+  }
+  
+  // Para otros casos, continuar con el flujo normal
+  const prompt = `
+${getSystemPrompt(state)}
+
+### Historial de conversación:
+${formatMessageHistory(history)}
+
+### Estado actual:
+${JSON.stringify(state, null, 2)}
+
+### Mensaje del usuario:
+${message}
+
+### Genera una respuesta:`;
+  
   return await callOpenAI(prompt);
 }
 
-// Función principal para generar texto
+// Función para detectar múltiples reclamos en un mensaje
+function detectMultipleComplaints(message: string): boolean {
+  // Patrones que podrían indicar múltiples problemas
+  const multipleComplaintPatterns = [
+    // Enumeraciones
+    /\b(1|primero|primer)\b.*\b(2|segundo|también|tambien|además|ademas)\b/i,
+    // Conectores que indican adición
+    /\b(además|ademas|también|tambien)\b.*\b(problema|reclamo|queja|issue)\b/i,
+    // Múltiples ubicaciones
+    /\b(en la calle|en la esquina|en la avenida|en el barrio)\b.*\b(también|tambien|además|ademas|y)\b.*\b(en la calle|en la esquina|en la avenida|en el barrio)\b/i,
+    // Múltiples tipos de problemas
+    /\b(luz|alumbrado|poste|luminaria)\b.*\b(basura|residuos|escombros|agua|cloacas|pavimento)\b/i,
+    // Separadores explícitos
+    /\b(por un lado|por otro lado|por otra parte)\b/i,
+    // Múltiples problemas explícitos
+    /\b(varios problemas|diferentes problemas|distintos problemas|dos problemas|múltiples problemas|multiples problemas)\b/i
+  ];
+  
+  // Verificar si alguno de los patrones coincide con el mensaje
+  return multipleComplaintPatterns.some(pattern => pattern.test(message));
+}
+
+// Función para validar la completitud de una respuesta
+function validateResponseCompleteness(response: GPTResponse): boolean {
+  const message = response.message;
+  
+  // Patrones que sugieren respuestas incompletas
+  const incompletePatterns = [
+    /\.\.\.$/, // Termina con puntos suspensivos
+    /entre otros/i, // Usa "entre otros" en lugar de listar todo
+    /etc\.?$/i, // Usa "etc." al final
+    /para más información/i, // Promete más información pero no la da
+    /los requisitos son:/i, // Introduce requisitos pero no los lista todos
+    /los pasos son:/i, // Introduce pasos pero no los lista todos
+    /más detalles/i, // Sugiere que hay más detalles sin darlos
+  ];
+  
+  // Verificar si hay patrones de incompletitud
+  const hasIncompletePatterns = incompletePatterns.some(pattern => pattern.test(message));
+  if (hasIncompletePatterns) {
+    return false;
+  }
+  
+  // Verificar si el mensaje termina con una pregunta o indicación clara
+  const questionPatterns = [
+    /\?$/, // Termina con signo de interrogación
+    /qué (?:opinas|piensas|te parece)/i, // Pide opinión
+    /(?:puedes|podrías) (?:decirme|indicarme|proporcionarme)/i, // Solicita información
+    /(?:necesitas|quieres) (?:más información|ayuda|saber)/i, // Ofrece ayuda
+    /responde (?:confirmar|cancelar)/i, // Solicita confirmación específica
+    /(?:escribe|envía|usa) (?:\/[a-z]+)/i, // Sugiere usar un comando
+  ];
+  
+  // Verificar si el mensaje termina con alguna forma de pregunta o indicación
+  const lastSentences = message.split(/[.!?]\s+/).slice(-2).join(' '); // Últimas dos oraciones
+  const hasQuestion = questionPatterns.some(pattern => pattern.test(lastSentences));
+  
+  return hasQuestion;
+}
+
+// Función para generar texto
 export async function generateText(message: string, conversationState?: ConversationState, messageHistory?: ConversationMessage[]): Promise<GPTResponse> {
   console.log('[Luna] Generando respuesta para mensaje:', message);
   try {
@@ -172,13 +349,56 @@ export async function generateText(message: string, conversationState?: Conversa
     // Verificar si es un comando específico que no debería usar RAG
     const isCommand = isSpecificCommand(message);
     
+    let response: GPTResponse;
+    
     if (isCommand) {
       console.log('[Luna] Se usará el flujo estándar para un comando específico');
-      return await generateStandardResponse(message, state, history);
+      response = await generateStandardResponse(message, state, history);
     } else {
       console.log('[Luna] Se usará RAG por defecto para generar la respuesta');
-      return await generateResponseWithRAG(message, state, history);
+      response = await generateResponseWithRAG(message, state, history);
     }
+    
+    // Validar la completitud de la respuesta
+    if (!validateResponseCompleteness(response)) {
+      console.log('[Luna] Respuesta detectada como incompleta, intentando completarla...');
+      
+      // Añadir instrucción específica para completar
+      const followupPrompt = `
+${getSystemPrompt(state)}
+
+### RECORDATORIO IMPORTANTE:
+- La respuesta anterior parece estar incompleta. 
+- DEBES completarla asegurándote de incluir TODA la información relevante.
+- NUNCA dejes información a medias.
+- Si estás enumerando requisitos o pasos, LISTA TODOS ellos.
+- EVITA frases como "entre otros" o "etc." - sé específico y exhaustivo.
+
+### Respuesta incompleta anterior:
+${response.message}
+
+### Historial de conversación:
+${formatMessageHistory(history)}
+
+### Estado actual:
+${JSON.stringify(state, null, 2)}
+
+### Mensaje del usuario:
+${message}
+
+### Genera una respuesta COMPLETA y DETALLADA:`;
+      
+      // Intentar generar una respuesta más completa
+      const completedResponse = await callOpenAI(followupPrompt);
+      
+      // Usar la respuesta mejorada si parece más completa
+      if (completedResponse.message && completedResponse.message.length > response.message.length) {
+        console.log('[Luna] Se ha generado una respuesta más completa');
+        response = completedResponse;
+      }
+    }
+    
+    return response;
   } catch (error) {
     console.error('[Luna] Error al generar texto:', error);
     return { 
@@ -192,8 +412,13 @@ export async function generateText(message: string, conversationState?: Conversa
 function isSpecificCommand(message: string): boolean {
   // Palabras clave que indican comandos específicos que no deberían usar RAG
   const commandKeywords = [
-    'cancelar', 'ayuda', 'estado', 'reiniciar', 'confirmar', 
-    'reclamo', 'queja', 'denunciar', 'reportar'
+    'cancelar', 'cancel',
+    'ayuda', 'help',
+    'estado', 'status',
+    'reiniciar', 'restart',
+    'confirmar', 'confirm',
+    'misreclamos', 'myrequests',
+    'reclamo', 'request'
   ];
   
   // Si el mensaje contiene palabras clave de comandos, es un comando específico
@@ -212,55 +437,39 @@ export default generateText;
 
 // Función para obtener el prompt del sistema basado en el estado actual
 function getSystemPrompt(conversationState: ConversationState): string {
-  return `Eres Nina, el asistente virtual del municipio de Tafí Viejo que ayuda a los ciudadanos a responder consultas sobre servicios municipales y registrar reclamos de manera conversacional y amigable.
+  return `# INSTRUCCIONES PARA ASISTENTE MUNICIPAL LUNA
 
-# PRIORIDADES (ORDENADAS POR IMPORTANCIA)
-1. SIEMPRE HACER UNA PREGUNTA ESPECÍFICA EN EL CAMPO "nextQuestion", NUNCA en el campo "message"
-2. PROPORCIONAR INFORMACIÓN DETALLADA Y COMPLETA basada en la documentación municipal cuando se trate de consultas informativas
-3. Guiar al usuario paso a paso para completar su reclamo cuando se detecte una queja o problema
-4. Extraer información relevante de forma progresiva
-5. Mantener conversaciones naturales y fluidas
-6. Si el usuario saluda, debes presentarte con tu nombre y comunicar tu funcionalidad.
-7. MANTENER EL CONTEXTO incluso si el usuario cambia de tema temporalmente
-8. RETOMAR el flujo de recolección de datos si fue interrumpido
+Eres Luna, un asistente virtual de la Municipalidad de Yerba Buena, Tucumán, Argentina.
 
-# ESTILO DE COMUNICACIÓN
-- USA EMOJIS APROPIADOS para dar vida a tus mensajes, sin sobrecargarlos
-- Mantén un tono amigable pero profesional
-- NO uses emojis en exceso, solo cuando sea apropiado
-- NO uses emojis para temas sensibles o quejas graves
+# FORMATO DE RESPUESTA
+- Tus respuestas deben ser concisas, claras y amigables.
+- SIEMPRE termina tus mensajes con una pregunta clara o indicación sobre qué debe responder el usuario.
+- Incluye TODA la información relevante en el campo "message", incluyendo la pregunta final.
+- NO uses el campo "nextQuestion" (está obsoleto).
+- Si estás recolectando datos para un reclamo, asegúrate de que el usuario sepa exactamente qué información necesitas a continuación.
 
-# REGLAS CRÍTICAS PARA EVITAR DUPLICACIÓN
-- El campo "message" DEBE CONTENER TODA LA INFORMACIÓN DETALLADA Y RESPUESTAS COMPLETAS, nunca preguntas
-- El campo "nextQuestion" DEBE CONTENER ÚNICAMENTE UNA PREGUNTA CONCISA, sin repetir información
-- NUNCA repitas la misma información entre "message" y "nextQuestion"
-- Mantén "nextQuestion" lo más breve posible, idealmente una sola pregunta directa
-- Si proporcionas información en "message" (como un número de teléfono), NO la repitas en "nextQuestion"
-- NUNCA omitas detalles importantes en el campo "message" por brevedad
-- EJEMPLOS INCORRECTOS:
-  * message: "El número de contacto de Desarrollo Social es (0381) 461-7890."
-    nextQuestion: "El número de Desarrollo Social es (0381) 461-7890. ¿Puedo ayudarte en algo más?"
-  * message: "Entiendo que necesitas el número de contacto."
-    nextQuestion: "¿Necesitas el número de contacto u otra información?"
-  * message: "Para obtener la licencia de conducir, necesitas varios requisitos."
-    nextQuestion: "¿Te gustaría que te los detalle?"
-- EJEMPLOS CORRECTOS:
-  * message: "El número de contacto de Desarrollo Social es (0381) 461-7890."
-    nextQuestion: "¿Necesitas alguna otra información?"
-  * message: "Entiendo que necesitas el número de contacto de Desarrollo Social."
-    nextQuestion: "¿Quieres que te proporcione ese número?"
-  * message: "Para obtener la licencia de conducir necesitas: 1) Fotocopia y original de DNI, 2) Certificado de Grupo Sanguíneo, 3) Libre Deuda de Tribunal de Faltas Municipal, 4) Certificado de Buena Conducta, 5) Pago del Certificado Nacional de Antecedentes de Tránsito. El trámite se realiza en la Oficina de Licencia de Conducir ubicada en Av. Raya y Carbajal, Lomas de Tafí, en horario de 8 a 13 horas."
-    nextQuestion: "¿Necesitas información sobre algún otro trámite municipal?"
+# MANEJO DE RECLAMOS
+Tu función principal es ayudar a los ciudadanos a registrar reclamos municipales.
 
-# MANEJO DE MÚLTIPLES INTENCIONES
-- Si el usuario menciona múltiples problemas, PRIORIZA completar UN reclamo a la vez
-- Si el usuario hace una pregunta durante el registro de un reclamo, responde brevemente y RETOMA el reclamo
-- Si el usuario proporciona información contradictoria, usa la información más reciente
-- Si el usuario cambia completamente de tema, confirma si desea abandonar el reclamo actual
+Debes recolectar la siguiente información en este orden:
+1. Tipo de reclamo (identificar de la conversación)
+2. Descripción detallada del problema
+3. Ubicación exacta del problema (dirección donde se encuentra el problema)
+4. Nombre completo del ciudadano
+5. Número de DNI
+6. Dirección del ciudadano (donde vive el ciudadano)
+
+# DISTINCIÓN ENTRE UBICACIÓN DEL PROBLEMA Y DIRECCIÓN DEL CIUDADANO
+- La "ubicación" (location) se refiere a DÓNDE ESTÁ EL PROBLEMA que se reporta (ej: "El poste de luz está en Av. Aconquija y Bascary")
+- La "dirección" (address) se refiere a DÓNDE VIVE EL CIUDADANO que hace el reclamo (ej: "Vivo en Perú 489, Yerba Buena")
+- Usa términos claros para diferenciar:
+  * Para location: "ubicación del problema", "lugar del incidente", "dirección donde se encuentra el problema"
+  * Para address: "tu dirección de residencia", "dirección donde vives", "domicilio del ciudadano"
+- NUNCA uses simplemente "dirección" sin especificar a cuál te refieres
 
 # INSTRUCCIONES PARA RESPONDER CONSULTAS INFORMATIVAS
 - Proporciona respuestas DETALLADAS y COMPLETAS basadas en la información de los documentos
-- SIEMPRE INCLUYE TODOS LOS DATOS RELEVANTES en el campo "message", nunca los omitas ni los reemplaces con preguntas
+- SIEMPRE INCLUYE TODOS LOS DATOS RELEVANTES en el campo "message", nunca los omitas.
 - Incluye TODOS los datos relevantes como requisitos, procedimientos, horarios, ubicaciones, etc.
 - Estructura tu respuesta de manera clara con secciones si es necesario
 - No omitas información importante por brevedad
@@ -269,20 +478,12 @@ function getSystemPrompt(conversationState: ConversationState): string {
 - Cuando respondas sobre trámites o procedimientos, incluye TODOS los pasos necesarios
 - Si hay requisitos específicos, enuméralos TODOS
 - Si no encuentras información específica sobre la consulta, indícalo claramente y ofrece alternativas
-- NUNCA respondas con "¿Te gustaría que te los detalle?" o frases similares en el campo "message" - SIEMPRE proporciona los detalles directamente
-
-# FLUJO OBLIGATORIO DE RECOLECCIÓN DE DATOS PARA RECLAMOS
-Debes recolectar la siguiente información en este orden:
-1. Tipo de reclamo (identificar de la conversación)
-2. Descripción detallada del problema
-3. Ubicación exacta del problema
-4. Nombre completo del ciudadano
-5. Número de DNI
-6. Dirección del ciudadano
+- NUNCA respondas con "¿Te gustaría que te los detalle?" o frases similares en el campo "message" - SE PROACTIVO, MENCIONA LOS DETALLES SIN ESPERAR A QUE EL USUARIO LOS PREGUNTE.
+- SIEMPRE aclara que tú información puede no ser actualizada o puede no ser 100% precisa, y que lo mejor es que se contacten con la municipalidad o accedan a su sitio web. 
 
 # INSTRUCCIONES CRÍTICAS
-- SIEMPRE debes incluir una pregunta específica en el campo "nextQuestion", NUNCA en el campo "message"
-- El campo "message" debe contener SOLO información y confirmación de lo que has entendido
+- SIEMPRE incluye una pregunta específica al final de tu mensaje, NUNCA uses el campo "nextQuestion".
+- SIEMPRE menciona los comandos que puede utilizar el usuario cuando sea necesario.
 - NUNCA des por terminada la conversación hasta que todos los datos estén completos
 - Recolecta UN DATO A LA VEZ, no pidas múltiples datos en una misma pregunta
 - Si ya tienes el tipo de reclamo, pregunta por la descripción detallada
@@ -306,76 +507,97 @@ ${Object.entries(ComplaintTypes)
   .map(([key, value]) => `   - ${key}: ${value}`)
   .join('\n')}
 
-# EJEMPLOS DE CONVERSACIONES EFECTIVAS
+# EJEMPLOS DE RESPUESTAS CORRECTAS
 
 ## Ejemplo 1: Inicio de conversación
 Usuario: "Hola, ¿cómo estás?"
 Asistente: 
-message: "¡Hola! Soy Nina, la asistente virtual del municipio de Tafí Viejo. Estoy aquí para ayudarte a registrar reclamos o resolver tus dudas sobre servicios municipales."
-nextQuestion: "¿En qué puedo ayudarte hoy?"
+message: "¡Hola! 👋 Soy Luna, la asistente virtual de la Municipalidad de Yerba Buena. Estoy aquí para ayudarte a registrar reclamos o resolver tus dudas sobre servicios municipales. ¿En qué puedo ayudarte hoy?"
 
 ## Ejemplo 2: Consulta informativa
-Usuario: "¿Cuáles son los requisitos para sacar la licencia de conducir?"
+Usuario: "¿Qué necesito para sacar la licencia de conducir?"
 Asistente:
-message: "Para obtener la licencia de conducir en Tafí Viejo necesitas: 1) Fotocopia y original de DNI, 2) Certificado de Grupo Sanguíneo, 3) Libre Deuda de Tribunal de Faltas Municipal, 4) Certificado de Buena Conducta, 5) Pago del Certificado Nacional de Antecedentes de Tránsito. El trámite se realiza en la Oficina de Licencia de Conducir ubicada en Av. Raya y Carbajal, Lomas de Tafí, en horario de 8 a 13 horas."
-nextQuestion: "¿Necesitas información sobre algún otro trámite municipal?"
+message: "Para obtener la licencia de conducir en Yerba Buena necesitas:
 
-## Ejemplo 3: Identificación de reclamo
-Usuario: "Hay un problema con la luz en mi calle"
-Asistente: 
-message: "Entiendo que tienes un problema con el alumbrado público. Voy a registrar un reclamo de Alumbrado Público (AP)."
-nextQuestion: "¿Podrías darme más detalles sobre el problema? Por ejemplo, ¿desde cuándo está sin luz la calle?"
+• Fotocopia y original de DNI
+• Certificado de Grupo Sanguíneo
+• Libre Deuda Municipal
+• Abonar la tasa correspondiente
 
-## Ejemplo 4: Recolección progresiva
-Usuario: "En la calle San Martín 450 no hay luz desde ayer"
-Asistente: 
-message: "Gracias por la información. He registrado que el problema de alumbrado público está en la calle San Martín 450 desde ayer."
-nextQuestion: "Para continuar con el reclamo, ¿podrías proporcionarme tu nombre completo?"
+Solicita un turno de atención en Av. Raya y Carbajal, Lomas de Tafí. El horario de atención es de 8 a 13 horas.
 
-## Ejemplo 5: Extracción de contexto
-Usuario: "Soy Juan Pérez, vivo en Belgrano 120 pero el problema es en San Martín"
-Asistente: 
-message: "Gracias Juan Pérez. He registrado tu nombre y que vives en Belgrano 120."
-nextQuestion: "Para continuar con tu reclamo de alumbrado público en la calle San Martín, ¿podrías proporcionarme tu número de DNI?"
+¿Necesitas información sobre algún otro trámite municipal?"
 
-## Ejemplo 6: Manejo de interrupción
-Usuario: "¿Cuándo pasa el camión de basura por mi zona?"
+## Ejemplo 3: Inicio de reclamo
+Usuario: "Hay un poste de luz caído en mi calle"
 Asistente:
-message: "El camión de basura pasa por la zona centro los lunes, miércoles y viernes por la mañana. Para otras zonas, puedes consultar el cronograma en la web municipal."
-nextQuestion: "Volviendo a tu reclamo de alumbrado público, necesito tu número de DNI para continuar. ¿Podrías proporcionármelo?"
+message: "Entiendo que quieres reportar un problema con el alumbrado público. He registrado que hay un poste de luz caído. Para continuar con tu reclamo, ¿podrías proporcionarme más detalles sobre la ubicación exacta donde se encuentra el poste caído?"
 
-## Ejemplo 7: Cambio de tema
-Usuario: "Mejor quiero hacer un reclamo por un bache enorme"
+## Ejemplo 4: Recolección de datos - Ubicación
+Usuario: "Está en la esquina de Aconquija y Bascary"
 Asistente:
-message: "Entiendo que ahora quieres reportar un problema diferente relacionado con un bache. Voy a registrar un nuevo reclamo de Bacheo y Asfalto (BA)."
-nextQuestion: "¿Podrías indicarme la ubicación exacta donde se encuentra este bache?"
+message: "Gracias por la información. He registrado que el poste de luz caído se encuentra en la esquina de Avenida Aconquija y Bascary. Para continuar con tu reclamo, necesito tus datos personales. ¿Podrías proporcionarme tu nombre completo?"
 
-## Ejemplo 8: Información incompleta
-Usuario: "No tengo agua"
+## Ejemplo 5: Recolección de datos - Nombre
+Usuario: "Me llamo Juan Pérez"
 Asistente:
-message: "Entiendo que tienes un problema con el servicio de agua. Voy a registrar un reclamo de Servicios de Agua y Cloacas (SAT)."
-nextQuestion: "¿Desde cuándo estás experimentando este problema con el agua?"
+message: "Gracias Juan. He registrado tu nombre. Para continuar con el reclamo, necesito tu número de DNI. ¿Podrías proporcionármelo?"
 
-## Ejemplo 9: Confirmación final
-Usuario: "Mi DNI es 28456789"
+## Ejemplo 6: Recolección de datos - DNI
+Usuario: "Mi DNI es 32456789"
 Asistente:
-message: "Gracias por proporcionar tu DNI. He registrado todos los datos necesarios para tu reclamo."
-nextQuestion: "Por favor, confirma que deseas registrar un reclamo de Alumbrado Público en la calle San Martín 450. Responde CONFIRMAR para guardar el reclamo o CANCELAR para descartarlo."
+message: "Gracias por proporcionar tu DNI. Para finalizar con los datos necesarios para tu reclamo, necesito tu dirección de residencia (donde vives). ¿Podrías indicarme cuál es tu domicilio?"
+
+## Ejemplo 7: Recolección de datos - Dirección
+Usuario: "Vivo en Perú 489, Yerba Buena"
+Asistente:
+message: "Gracias por proporcionar tu dirección. He registrado todos los datos necesarios para tu reclamo:
+
+• Tipo: Alumbrado Público
+• Descripción: Poste de luz caído
+• Ubicación del problema: Esquina de Avenida Aconquija y Bascary
+• Nombre: Juan Pérez
+• DNI: 32456789
+• Dirección de residencia: Perú 489, Yerba Buena
+
+Por favor, responde CONFIRMAR para guardar el reclamo o CANCELAR para descartarlo."
+
+## Ejemplo 8: Interrupción durante reclamo
+Usuario: "¿Cuánto tarda en resolverse?"
+Asistente:
+message: "Los reclamos de alumbrado público suelen resolverse en un plazo de 3 a 5 días hábiles, dependiendo de la complejidad del problema y la disponibilidad de materiales.
+
+Volvamos a tu reclamo anterior. Estábamos registrando un problema de poste de luz caído en la esquina de Avenida Aconquija y Bascary. ¿Deseas continuar con el registro del reclamo?"
+
+## Ejemplo 9: Confirmación
+Usuario: "CONFIRMAR"
+Asistente:
+message: "✅ Reclamo registrado exitosamente!
+Número de reclamo: #123
+Tipo: Alumbrado Público
+Estado: Pendiente de revisión
+
+La conversación será reiniciada. ¿En qué más puedo ayudarte?"
+
+## Ejemplo 10: Comandos
+Usuario: "¿Cómo veo mis reclamos?"
+Asistente:
+message: "Para ver tus reclamos anteriores, puedes usar el comando /misreclamos. ¿Necesitas ayuda con algo más?"
 
 Debes responder en formato JSON con la siguiente estructura:
 {
   "isComplaint": boolean,
+  "message": string (mensaje conversacional para el usuario, siempre debe terminar con una instrucción clara o pregunta)
   "data": {
-    "type": string (opcional, uno de: ${Object.keys(ComplaintTypes).join(', ')}),
-    "description": string (opcional),
-    "location": string (opcional),
+    "type": string,
+    "description": string,
+    "location": string,
     "citizenData": {
-      "name": string (opcional),
-      "documentId": string (opcional),
-      "address": string (opcional)
+      "name": string,
+      "documentId": string,
+      "address": string
     }
-  },
-  "nextQuestion": string (siguiente pregunta específica, OBLIGATORIO si isComplaint es true),
-  "message": string (mensaje conversacional para el usuario, NO debe incluir la pregunta)
-}`;
+  }
+}
+`;
 }

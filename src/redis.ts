@@ -138,6 +138,38 @@ export async function deleteConversationState(phoneNumber: string): Promise<void
   }
 }
 
+// Función para eliminar completamente una conversación
+export async function deleteConversation(phoneNumber: string): Promise<boolean> {
+  try {
+    console.log(`[Redis] Eliminando completamente la conversación para ${phoneNumber}...`);
+    
+    // Construir la clave con el prefijo
+    const key = CONVERSATION_PREFIX + phoneNumber;
+    
+    // Verificar si la clave existe antes de eliminarla
+    const exists = await redis.exists(key);
+    console.log(`[Redis] ¿La clave ${key} existe? ${exists ? 'Sí' : 'No'}`);
+    
+    if (exists) {
+      // Eliminar la clave
+      const result = await redis.del(key);
+      console.log(`[Redis] Resultado de la eliminación: ${result}`);
+      
+      // Verificar que se haya eliminado
+      const existsAfter = await redis.exists(key);
+      console.log(`[Redis] ¿La clave ${key} existe después de eliminarla? ${existsAfter ? 'Sí' : 'No'}`);
+      
+      return !existsAfter;
+    } else {
+      console.log(`[Redis] La clave ${key} no existía, no es necesario eliminarla.`);
+      return true;
+    }
+  } catch (error) {
+    console.error(`[Redis] Error al eliminar la conversación para ${phoneNumber}:`, error);
+    return false;
+  }
+}
+
 // Estado inicial de una conversación
 export const initialConversationState: ConversationState = {
   isComplaintInProgress: false,
