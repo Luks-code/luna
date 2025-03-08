@@ -267,6 +267,63 @@ async function processMessage(from: string, message: string, conversationState?:
     messageHistory = await getMessageHistory(from);
   }
 
+  // Verificar si estamos en estado de confirmación de reclamo
+  if ((conversationState.awaitingConfirmation || conversationState.confirmationRequested) && 
+      conversationState.mode === ConversationMode.COMPLAINT && 
+      isReadyToSave(conversationState.complaintData)) {
+    
+    // Normalizar el mensaje para comparación
+    const normalizedMessage = message.toLowerCase().trim();
+    
+    let responseMessage = "";
+    
+    // Solo aceptar "confirmar" o "cancelar" como entradas válidas
+    if (normalizedMessage === 'confirmar') {
+      // Guardar el reclamo
+      conversationState.confirmedData = conversationState.complaintData;
+      await setConversationState(from, conversationState);
+      
+      try {
+        const complaintId = await saveComplaint(from, conversationState.complaintData);
+        responseMessage = `¡Gracias! Tu reclamo ha sido registrado exitosamente con el número #${complaintId}. Te notificaremos cuando haya novedades. ¿Hay algo más en lo que pueda ayudarte?`;
+        
+        // Reiniciar el estado del reclamo
+        conversationState.isComplaintInProgress = false;
+        conversationState.awaitingConfirmation = false;
+        conversationState.confirmationRequested = false;
+        conversationState.mode = ConversationMode.DEFAULT;
+        conversationState.complaintData = {};
+      } catch (error) {
+        console.error('Error al guardar el reclamo:', error);
+        responseMessage = "Lo siento, hubo un problema al guardar tu reclamo. Por favor, intenta nuevamente más tarde.";
+      }
+    } else if (normalizedMessage === 'cancelar') {
+      // Cancelar el reclamo
+      responseMessage = "He cancelado el registro del reclamo. Todos los datos ingresados han sido descartados. ¿Puedo ayudarte con algo más?";
+      
+      // Reiniciar el estado del reclamo
+      conversationState.isComplaintInProgress = false;
+      conversationState.awaitingConfirmation = false;
+      conversationState.confirmationRequested = false;
+      conversationState.mode = ConversationMode.DEFAULT;
+      conversationState.complaintData = {};
+    } else {
+      // Cualquier otra entrada no es válida
+      responseMessage = "Por favor, responde únicamente CONFIRMAR para guardar el reclamo o CANCELAR para descartarlo.";
+    }
+    
+    // Guardar el estado actualizado
+    await setConversationState(from, conversationState);
+    
+    // Enviar respuesta
+    await sendWhatsAppMessage(from, responseMessage);
+    
+    // Añadir respuesta al historial
+    await addMessageToHistory(from, 'assistant', responseMessage);
+    
+    return;
+  }
+
   // Generar respuesta con OpenAI
   const response = await generateText(message, conversationState, messageHistory);
 

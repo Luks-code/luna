@@ -208,7 +208,7 @@ Dirección: ${complaintData.citizenData?.address}
     // Devolver una respuesta que solicite confirmación explícita
     return {
       isComplaint: true,
-      message: `He recopilado todos los datos necesarios para tu reclamo. Aquí está el resumen:\n${complaintSummary.trim()}\n\nPara continuar, necesito tu confirmación explícita. Por favor, escribe CONFIRMAR para guardar el reclamo o CANCELAR para descartarlo.`,
+      message: `He recopilado todos los datos necesarios para tu reclamo. Aquí está el resumen:\n${complaintSummary.trim()}\n\nPor favor, responde únicamente CONFIRMAR para guardar el reclamo o CANCELAR para descartarlo.`,
       data: state.complaintData
     };
   }
@@ -336,21 +336,26 @@ export async function generateText(message: string, conversationState?: Conversa
     // Si estamos esperando confirmación, manejar directamente
     if (state.confirmationRequested && state.awaitingConfirmation) {
       console.log('[Luna] Esperando confirmación, procesando respuesta directamente');
-      if (message.toLowerCase() === 'confirmar') {
+      
+      // Normalizar el mensaje para comparación
+      const normalizedMessage = message.toLowerCase().trim();
+      
+      if (normalizedMessage === 'confirmar') {
         return {
           isComplaint: true,
           message: "¡Gracias! Tu reclamo ha sido registrado exitosamente. Te notificaremos cuando haya novedades. ¿Hay algo más en lo que pueda ayudarte?",
           data: state.complaintData
         };
-      } else if (message.toLowerCase() === 'cancelar') {
+      } else if (normalizedMessage === 'cancelar') {
         return {
           isComplaint: false,
           message: "He cancelado el registro del reclamo. Todos los datos ingresados han sido descartados. ¿Puedo ayudarte con algo más?"
         };
       } else {
+        // Cualquier otra entrada no es válida
         return {
           isComplaint: true,
-          message: "Por favor, escribe CONFIRMAR para guardar el reclamo o CANCELAR para descartarlo.",
+          message: "Por favor, responde únicamente CONFIRMAR para guardar el reclamo o CANCELAR para descartarlo.",
           data: state.complaintData
         };
       }
@@ -478,7 +483,7 @@ Dirección: ${complaintData.citizenData?.address}
     // Devolver una respuesta que solicite confirmación explícita
     return {
       isComplaint: true,
-      message: `He recopilado todos los datos necesarios para tu reclamo. Aquí está el resumen:\n${complaintSummary.trim()}\n\nPara continuar, necesito tu confirmación explícita. Por favor, escribe CONFIRMAR para guardar el reclamo o CANCELAR para descartarlo.`,
+      message: `He recopilado todos los datos necesarios para tu reclamo. Aquí está el resumen:\n${complaintSummary.trim()}\n\nPor favor, responde únicamente CONFIRMAR para guardar el reclamo o CANCELAR para descartarlo.`,
       data: state.complaintData
     };
   }
