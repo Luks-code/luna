@@ -436,8 +436,17 @@ async function processComplaintMode(message: string, state: ConversationState, h
     // Cambiar temporalmente al modo INFO
     state.mode = ConversationMode.INFO;
     
-    // Reiniciar la bandera de mensaje de cambio de modo
+    // Reiniciar la bandera de mensaje de cambio de modo para que se muestre el mensaje de cambio a INFO
     state.modeChangeMessageSent = false;
+    
+    // Marcar como flujo interrumpido para poder volver después
+    if (!state.interruptedFlow) {
+      state.interruptedFlow = true;
+      state.interruptionContext = {
+        originalIntent: IntentType.COMPLAINT,
+        resumePoint: state.currentStep
+      };
+    }
     
     // Procesar como consulta informativa
     return await processInfoMode(message, state, history);
@@ -502,8 +511,13 @@ async function processInfoMode(message: string, state: ConversationState, histor
       // Volver al modo COMPLAINT
       state.mode = ConversationMode.COMPLAINT;
       
-      // Agregar un recordatorio sobre el reclamo en progreso
-      response.message += "\n\nRecuerda que tienes un reclamo en progreso. ¿Deseas continuar con él o necesitas ayuda con algo más?";
+      // No reiniciar la bandera modeChangeMessageSent para evitar mostrar nuevamente el mensaje de cambio a modo COMPLAINT
+      state.modeChangeMessageSent = true;
+      
+      // Agregar un recordatorio sobre el reclamo en progreso, pero solo si la respuesta no es muy larga
+      if (response.message.length < 500) {
+        response.message += "\n\nRecuerda que tienes un reclamo en progreso. ¿Deseas continuar con él o necesitas ayuda con algo más?";
+      }
     }
     
     return response;
@@ -518,8 +532,13 @@ async function processInfoMode(message: string, state: ConversationState, histor
       // Volver al modo COMPLAINT
       state.mode = ConversationMode.COMPLAINT;
       
-      // Agregar un recordatorio sobre el reclamo en progreso
-      response.message += "\n\nRecuerda que tienes un reclamo en progreso. ¿Deseas continuar con él o necesitas ayuda con algo más?";
+      // No reiniciar la bandera modeChangeMessageSent para evitar mostrar nuevamente el mensaje de cambio a modo COMPLAINT
+      state.modeChangeMessageSent = true;
+      
+      // Agregar un recordatorio sobre el reclamo en progreso, pero solo si la respuesta no es muy larga
+      if (response.message.length < 500) {
+        response.message += "\n\nRecuerda que tienes un reclamo en progreso. ¿Deseas continuar con él o necesitas ayuda con algo más?";
+      }
     }
     
     return response;

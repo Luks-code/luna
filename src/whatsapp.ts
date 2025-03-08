@@ -294,6 +294,19 @@ async function processMessage(from: string, message: string, conversationState?:
     
     // Actualizar la intención actual
     conversationState.currentIntent = newIntent;
+    
+    // Si cambiamos de COMPLAINT a INQUIRY, es posible que necesitemos cambiar a modo INFO
+    if (conversationState.currentIntent === IntentType.INQUIRY && 
+        conversationState.previousIntent === IntentType.COMPLAINT &&
+        conversationState.mode === ConversationMode.COMPLAINT) {
+      // Verificar si el mensaje parece una consulta informativa
+      if (isLikelyInformationQuery(message)) {
+        console.log('[Luna] Cambiando temporalmente a modo INFO desde COMPLAINT');
+        conversationState.previousMode = conversationState.mode;
+        conversationState.mode = ConversationMode.INFO;
+        conversationState.modeChangeMessageSent = false;
+      }
+    }
   }
 
   // Si hay un flujo interrumpido y volvemos a la intención original, restaurar el contexto
@@ -377,7 +390,9 @@ async function processMessage(from: string, message: string, conversationState?:
   
   // Añadir información sobre el cambio de modo si es relevante
   if (conversationState.mode === ConversationMode.COMPLAINT && 
-      !conversationState.modeChangeMessageSent) {
+      !conversationState.modeChangeMessageSent &&
+      // No mostrar el mensaje si estamos volviendo de modo INFO a COMPLAINT
+      !(conversationState.previousMode === ConversationMode.INFO && conversationState.interruptedFlow)) {
     // Si estamos en modo COMPLAINT y no se ha enviado el mensaje, mostrarlo
     responseMessage = "He detectado que estás intentando hacer un reclamo, así que he cambiado al modo de reclamos para ayudarte mejor.\n\n" + responseMessage;
     // Marcar que ya se envió el mensaje de cambio de modo
@@ -388,6 +403,17 @@ async function processMessage(from: string, message: string, conversationState?:
     responseMessage = "He cambiado al modo de información para proporcionarte detalles más completos.\n\n" + responseMessage;
     // Marcar que ya se envió el mensaje de cambio de modo
     conversationState.modeChangeMessageSent = true;
+    
+    // Si venimos de un reclamo, marcarlo como flujo interrumpido para poder volver después
+    if (conversationState.previousMode === ConversationMode.COMPLAINT && 
+        conversationState.isComplaintInProgress && 
+        !conversationState.interruptedFlow) {
+      conversationState.interruptedFlow = true;
+      conversationState.interruptionContext = {
+        originalIntent: IntentType.COMPLAINT,
+        resumePoint: conversationState.currentStep
+      };
+    }
   }
   
   // Enviar respuesta
@@ -471,4 +497,15 @@ async function saveComplaint(from: string, complaintData: any) {
     
     return false;
   }
+}
+
+function isLikelyInformationQuery(message: string): boolean {
+  const informationQueryPatterns = [
+    /\b(qué|quién|dónde|cuándo|por qué|cómo)\b/i,
+    /\b(información|detalles|datos|sobre)\b/i,
+    /\b(horario|dirección|teléfono|correo)\b/i,
+    /\b(ayuda|soporte|asistencia)\b/i
+  ];
+  
+  return informationQueryPatterns.some(pattern => pattern.test(message));
 }

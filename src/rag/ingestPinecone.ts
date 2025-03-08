@@ -3,7 +3,6 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as dotenv from 'dotenv';
 import { getIndex, PINECONE_INDEX_NAME } from './pineconeClient';
-import { v4 as uuidv4 } from 'uuid';
 
 dotenv.config();
 
