@@ -39,6 +39,13 @@ export interface ConversationData {
   messageHistory: ConversationMessage[];
 }
 
+// Modos de conversación
+export enum ConversationMode {
+  DEFAULT = 'DEFAULT',
+  INFO = 'INFO',
+  COMPLAINT = 'COMPLAINT'
+}
+
 // Estado de la conversación
 export interface ConversationState {
   isComplaintInProgress: boolean;
@@ -59,7 +66,12 @@ export interface ConversationState {
     pendingQuestion?: string;
     resumePoint?: string;
   };
-  confirmationRequested?: boolean; // Nuevo campo para rastrear si se ha solicitado confirmación
+  confirmationRequested?: boolean; // Campo para rastrear si se ha solicitado confirmación
+  
+  // Nuevo campo para el modo de conversación
+  mode?: ConversationMode;
+  previousMode?: ConversationMode;
+  modeChangeMessageSent?: boolean; // Indica si ya se ha enviado el mensaje de cambio de modo
 }
 
 // Tipos de intención
@@ -79,12 +91,16 @@ export const COMMANDS = {
   REINICIAR: 'REINICIAR',
   CONFIRMAR: 'CONFIRMAR',
   MISRECLAMOS: 'MISRECLAMOS',
-  RECLAMO: 'RECLAMO'
+  RECLAMO: 'RECLAMO',
+  INFO: 'INFO',
+  CONSULTA: 'CONSULTA',
+  NORMAL: 'NORMAL',
+  DEFAULT: 'DEFAULT'
 } as const;
 
 export type Command = typeof COMMANDS[keyof typeof COMMANDS];
 
-// Estado del reclamo
+// Estados de reclamos
 export enum ComplaintStatus {
   PENDIENTE = 'PENDIENTE',
   EN_PROCESO = 'EN_PROCESO',

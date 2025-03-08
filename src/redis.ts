@@ -1,5 +1,5 @@
 import { Redis } from '@upstash/redis';
-import { ConversationState, ConversationData, ConversationMessage, IntentType } from './types';
+import { ConversationState, ConversationData, ConversationMessage, IntentType, ConversationMode } from './types';
 
 // Inicializar cliente de Redis
 export const redis = new Redis({
@@ -188,5 +188,11 @@ export const initialConversationState: ConversationState = {
     originalIntent: undefined,
     pendingQuestion: undefined,
     resumePoint: undefined
-  }
+  },
+  confirmationRequested: false,
+  
+  // Modo de conversación
+  mode: ConversationMode.DEFAULT,
+  previousMode: undefined,
+  modeChangeMessageSent: false
 };

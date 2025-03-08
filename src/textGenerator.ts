@@ -1,6 +1,6 @@
 // textGenerator.ts
 import openai from './openai';
-import { GPTResponse, ConversationState, ConversationMessage, IntentType } from './types';
+import { GPTResponse, ConversationState, ConversationMessage, IntentType, ConversationMode } from './types';
 import { ComplaintTypes } from './prisma';
 import { ChatCompletionMessageParam } from 'openai/resources/chat';
 import { queryDocuments, formatDocumentsForContext, getRelevantContext } from './rag/queryPinecone';
@@ -186,22 +186,6 @@ async function generateStandardResponse(message: string, state: ConversationStat
   const complaintComplete = isComplaintDataComplete(state);
   const confirmationRequested = hasRequestedConfirmation(state);
   
-  // Detectar si hay múltiples reclamos en el mensaje
-  const hasMultipleComplaints = detectMultipleComplaints(message);
-  
-  // Si se detectan múltiples reclamos y no hay uno en progreso, informar al usuario
-  if (hasMultipleComplaints && !state.isComplaintInProgress) {
-    console.log('[Luna] Múltiples reclamos detectados, solicitando al usuario que los procese uno por uno');
-    
-    return {
-      isComplaint: true,
-      message: "He detectado que mencionas varios problemas diferentes. Para poder ayudarte mejor, necesito que procesemos un reclamo a la vez. Por favor, indícame cuál de los problemas mencionados te gustaría registrar primero. ¿Cuál es el problema principal que deseas reportar en este momento?",
-      data: {
-        type: "MULTIPLE"
-      }
-    };
-  }
-  
   // Si el reclamo está completo y no se ha solicitado confirmación, forzar la solicitud
   if (complaintComplete && !confirmationRequested && !message.toLowerCase().includes('confirmar') && !message.toLowerCase().includes('cancelar')) {
     console.log('[Luna] Reclamo completo detectado, solicitando confirmación explícita');
@@ -349,14 +333,44 @@ export async function generateText(message: string, conversationState?: Conversa
     // Verificar si es un comando específico que no debería usar RAG
     const isCommand = isSpecificCommand(message);
     
+    // Si estamos esperando confirmación, manejar directamente
+    if (state.confirmationRequested && state.awaitingConfirmation) {
+      console.log('[Luna] Esperando confirmación, procesando respuesta directamente');
+      if (message.toLowerCase() === 'confirmar') {
+        return {
+          isComplaint: true,
+          message: "¡Gracias! Tu reclamo ha sido registrado exitosamente. Te notificaremos cuando haya novedades. ¿Hay algo más en lo que pueda ayudarte?",
+          data: state.complaintData
+        };
+      } else if (message.toLowerCase() === 'cancelar') {
+        return {
+          isComplaint: false,
+          message: "He cancelado el registro del reclamo. Todos los datos ingresados han sido descartados. ¿Puedo ayudarte con algo más?"
+        };
+      } else {
+        return {
+          isComplaint: true,
+          message: "Por favor, escribe CONFIRMAR para guardar el reclamo o CANCELAR para descartarlo.",
+          data: state.complaintData
+        };
+      }
+    }
+    
     let response: GPTResponse;
     
-    if (isCommand) {
-      console.log('[Luna] Se usará el flujo estándar para un comando específico');
+    // Procesar según el modo actual
+    if (state.mode === ConversationMode.COMPLAINT || state.isComplaintInProgress) {
+      console.log('[Luna] Procesando en modo COMPLAINT');
+      response = await processComplaintMode(message, state, history);
+    } else if (state.mode === ConversationMode.INFO) {
+      console.log('[Luna] Procesando en modo INFO');
+      response = await processInfoMode(message, state, history);
+    } else if (isCommand) {
+      console.log('[Luna] Procesando comando específico');
       response = await generateStandardResponse(message, state, history);
     } else {
-      console.log('[Luna] Se usará RAG por defecto para generar la respuesta');
-      response = await generateResponseWithRAG(message, state, history);
+      console.log('[Luna] Procesando en modo DEFAULT');
+      response = await processDefaultMode(message, state, history);
     }
     
     // Validar la completitud de la respuesta
@@ -401,10 +415,178 @@ ${message}
     return response;
   } catch (error) {
     console.error('[Luna] Error al generar texto:', error);
-    return { 
+    return {
       isComplaint: false,
-      message: "Lo siento, ha ocurrido un error. Por favor, intenta de nuevo más tarde." 
+      message: "Lo siento, estoy teniendo problemas para procesar tu mensaje. ¿Podrías intentarlo de nuevo o reformularlo?"
     };
+  }
+}
+
+// Procesador para el modo de reclamos
+async function processComplaintMode(message: string, state: ConversationState, history: ConversationMessage[]): Promise<GPTResponse> {
+  console.log('[Luna] Procesando mensaje en modo COMPLAINT');
+  
+  // Detectar si el mensaje parece una consulta informativa
+  if (isLikelyInformationQuery(message) && !state.awaitingConfirmation && !state.confirmationRequested) {
+    console.log('[Luna] Mensaje detectado como consulta informativa mientras estaba en modo COMPLAINT');
+    
+    // Guardar el modo anterior
+    state.previousMode = state.mode;
+    
+    // Cambiar temporalmente al modo INFO
+    state.mode = ConversationMode.INFO;
+    
+    // Reiniciar la bandera de mensaje de cambio de modo
+    state.modeChangeMessageSent = false;
+    
+    // Procesar como consulta informativa
+    return await processInfoMode(message, state, history);
+  }
+  
+  // Verificar si todos los datos del reclamo están completos y no se ha solicitado confirmación aún
+  const complaintComplete = isComplaintDataComplete(state);
+  const confirmationRequested = hasRequestedConfirmation(state);
+  
+  // Si el reclamo está completo y no se ha solicitado confirmación, forzar la solicitud
+  if (complaintComplete && !confirmationRequested && !message.toLowerCase().includes('confirmar') && !message.toLowerCase().includes('cancelar')) {
+    console.log('[Luna] Reclamo completo detectado, solicitando confirmación explícita');
+    
+    // Crear un resumen de los datos del reclamo
+    const complaintData = state.complaintData!;
+    const complaintSummary = `
+Tipo de reclamo: ${complaintData.type}
+Descripción: ${complaintData.description}
+Ubicación: ${complaintData.location}
+Nombre: ${complaintData.citizenData?.name}
+DNI: ${complaintData.citizenData?.documentId}
+Dirección: ${complaintData.citizenData?.address}
+    `;
+    
+    // Actualizar el estado para indicar que se ha solicitado confirmación
+    state.confirmationRequested = true;
+    state.awaitingConfirmation = true; // Sincronizar ambos flags
+    
+    // Devolver una respuesta que solicite confirmación explícita
+    return {
+      isComplaint: true,
+      message: `He recopilado todos los datos necesarios para tu reclamo. Aquí está el resumen:\n${complaintSummary.trim()}\n\nPara continuar, necesito tu confirmación explícita. Por favor, escribe CONFIRMAR para guardar el reclamo o CANCELAR para descartarlo.`,
+      data: state.complaintData
+    };
+  }
+  
+  // Para otros casos, usar el flujo estándar
+  return await generateStandardResponse(message, state, history);
+}
+
+// Procesador para el modo de información
+async function processInfoMode(message: string, state: ConversationState, history: ConversationMessage[]): Promise<GPTResponse> {
+  console.log('[Luna] Procesando mensaje en modo INFO');
+  
+  try {
+    // En el modo INFO, siempre intentamos usar RAG primero
+    let response: GPTResponse;
+    
+    // Forzar el uso de RAG para consultas informativas, independientemente del estado del reclamo
+    try {
+      console.log('[Luna] Intentando usar RAG para consulta informativa');
+      response = await generateResponseWithRAG(message, state, history);
+    } catch (error) {
+      console.error('[INFO] Error al generar respuesta con RAG, usando flujo estándar:', error);
+      response = await generateStandardResponse(message, state, history);
+    }
+    
+    // Si estábamos en modo COMPLAINT y cambiamos temporalmente a INFO, volver al modo COMPLAINT
+    if (state.previousMode === ConversationMode.COMPLAINT && state.isComplaintInProgress) {
+      console.log('[Luna] Volviendo al modo COMPLAINT después de responder a consulta informativa');
+      
+      // Volver al modo COMPLAINT
+      state.mode = ConversationMode.COMPLAINT;
+      
+      // Agregar un recordatorio sobre el reclamo en progreso
+      response.message += "\n\nRecuerda que tienes un reclamo en progreso. ¿Deseas continuar con él o necesitas ayuda con algo más?";
+    }
+    
+    return response;
+  } catch (error) {
+    console.error('[INFO] Error general en processInfoMode:', error);
+    const response = await generateStandardResponse(message, state, history);
+    
+    // Si estábamos en modo COMPLAINT y cambiamos temporalmente a INFO, volver al modo COMPLAINT
+    if (state.previousMode === ConversationMode.COMPLAINT && state.isComplaintInProgress) {
+      console.log('[Luna] Volviendo al modo COMPLAINT después de responder a consulta informativa');
+      
+      // Volver al modo COMPLAINT
+      state.mode = ConversationMode.COMPLAINT;
+      
+      // Agregar un recordatorio sobre el reclamo en progreso
+      response.message += "\n\nRecuerda que tienes un reclamo en progreso. ¿Deseas continuar con él o necesitas ayuda con algo más?";
+    }
+    
+    return response;
+  }
+}
+
+// Procesador para el modo por defecto
+async function processDefaultMode(message: string, state: ConversationState, history: ConversationMessage[]): Promise<GPTResponse> {
+  console.log('[Luna] Procesando mensaje en modo DEFAULT');
+  
+  // Detectar múltiples reclamos
+  const hasMultipleComplaints = detectMultipleComplaints(message);
+  
+  // Si se detectan múltiples reclamos y no hay uno en progreso, informar al usuario
+  if (hasMultipleComplaints && !state.isComplaintInProgress) {
+    console.log('[Luna] Múltiples reclamos detectados, solicitando al usuario que los procese uno por uno');
+    
+    return {
+      isComplaint: true,
+      message: "He detectado que mencionas varios problemas diferentes. Para poder ayudarte mejor, necesito que procesemos un reclamo a la vez. Por favor, indícame cuál de los problemas mencionados te gustaría registrar primero. ¿Cuál es el problema principal que deseas reportar en este momento?",
+      data: {
+        type: "MULTIPLE"
+      }
+    };
+  }
+  
+  // Detectar si el mensaje parece un reclamo
+  const complaintKeywords = [
+    'reclamo', 'queja', 'problema', 'falla', 'arreglar', 'roto', 'dañado', 
+    'no funciona', 'mal estado', 'denunciar', 'reportar'
+  ];
+  
+  const lowerMessage = message.toLowerCase();
+  const isLikelyComplaint = complaintKeywords.some(keyword => lowerMessage.includes(keyword));
+  
+  // Si parece un reclamo y no hay uno en progreso, cambiar al modo de reclamo
+  if (isLikelyComplaint && !state.isComplaintInProgress) {
+    console.log('[Luna] Mensaje detectado como posible reclamo, cambiando a modo COMPLAINT');
+    state.mode = ConversationMode.COMPLAINT;
+    state.isComplaintInProgress = true;
+    
+    // Inicializar datos del reclamo
+    state.complaintData = {
+      type: undefined,
+      description: message,  // Usar el mensaje como descripción inicial
+      location: undefined,
+      citizenData: {
+        name: undefined,
+        documentId: undefined,
+        address: undefined
+      }
+    };
+    
+    return await processComplaintMode(message, state, history);
+  }
+  
+  // Para mensajes en modo DEFAULT, verificamos si debemos usar RAG según los criterios
+  try {
+    if (shouldUseRAG(message, state)) {
+      return await generateResponseWithRAG(message, state, history);
+    } else {
+      // Si no es apropiado usar RAG, usamos el flujo estándar
+      return await generateStandardResponse(message, state, history);
+    }
+  } catch (error) {
+    console.error('[DEFAULT] Error al generar respuesta con RAG:', error);
+    return await generateStandardResponse(message, state, history);
   }
 }
 
@@ -432,12 +614,45 @@ function isSpecificCommand(message: string): boolean {
   return isCommand;
 }
 
-// Exportar la función por defecto para compatibilidad con código existente
-export default generateText;
+// Función para determinar si se debe usar RAG para un mensaje
+function shouldUseRAG(message: string, state: ConversationState): boolean {
+  // 1. Priorizar el modo INFO - Usar RAG si estamos en modo INFO (este modo está específicamente diseñado para consultas informativas)
+  if (state.mode === ConversationMode.INFO) {
+    console.log('[Luna] Usando RAG porque estamos en modo INFO');
+    return true;
+  }
+  
+  // 2. No usar RAG si hay un reclamo en progreso en modo COMPLAINT
+  if (state.isComplaintInProgress && state.mode === ConversationMode.COMPLAINT) {
+    console.log('[Luna] No usando RAG porque hay un reclamo en progreso en modo COMPLAINT');
+    return false;
+  }
+  
+  // 3. No usar RAG para saludos simples y mensajes muy cortos no informativos
+  const lowercaseMessage = message.toLowerCase().trim();
+  const simpleGreetings = [
+    'hola', 'buenos días', 'buenas tardes', 'buenas noches', 
+    'hi', 'hello', 'hey', 'saludos', 'buen día', 'qué tal'
+  ];
+  
+  if (simpleGreetings.some(greeting => lowercaseMessage === greeting)) {
+    console.log('[Luna] No usando RAG para un saludo simple');
+    return false;
+  }
+  
+  // 4. Para todos los demás casos, permitir que GPT-4o-mini determine si necesita información adicional
+  // Esto proporciona flexibilidad mientras evita usar RAG en casos obvios donde no es necesario
+  console.log('[Luna] Permitiendo que el modelo determine si necesita información adicional');
+  return true;
+}
 
 // Función para obtener el prompt del sistema basado en el estado actual
 function getSystemPrompt(conversationState: ConversationState): string {
-  return `# INSTRUCCIONES PARA ASISTENTE MUNICIPAL LUNA
+  // Determinar el modo actual
+  const mode = conversationState.mode || ConversationMode.DEFAULT;
+  
+  // Base común del prompt
+  const basePrompt = `# INSTRUCCIONES PARA ASISTENTE MUNICIPAL LUNA
 
 Eres Nina, un asistente virtual de la Municipalidad de Tafí Viejo, Tucumán, Argentina.
 
@@ -448,9 +663,27 @@ Eres Nina, un asistente virtual de la Municipalidad de Tafí Viejo, Tucumán, Ar
 - NO uses el campo "nextQuestion" (está obsoleto).
 - Si estás recolectando datos para un reclamo, asegúrate de que el usuario sepa exactamente qué información necesitas a continuación.
 
-# MANEJO DE RECLAMOS
+# COMANDOS DISPONIBLES
+- /ayuda - Muestra todos los comandos disponibles
+- /estado - Muestra el estado del reclamo actual
+- /cancelar - Cancela el reclamo en curso
+- /reiniciar - Comienza una nueva conversación
+- /confirmar - Guarda el reclamo cuando se solicite
+- /misreclamos - Muestra todos tus reclamos anteriores
+- /reclamo <número> - Muestra los detalles de un reclamo específico
+- /info - Cambia al modo de información
+- /consulta - Cambia al modo de información
+`;
+
+  // Instrucciones específicas según el modo
+  let modeSpecificPrompt = '';
+  
+  if (mode === ConversationMode.COMPLAINT || conversationState.isComplaintInProgress) {
+    modeSpecificPrompt = `
+# MODO ACTUAL: RECLAMOS
 Tu función principal es ayudar a los ciudadanos a registrar reclamos municipales.
 
+# MANEJO DE RECLAMOS
 Debes recolectar la siguiente información en este orden:
 1. Tipo de reclamo (identificar de la conversación)
 2. Descripción detallada del problema
@@ -467,6 +700,28 @@ Debes recolectar la siguiente información en este orden:
   * Para address: "tu dirección de residencia", "dirección donde vives", "domicilio del ciudadano"
 - NUNCA uses simplemente "dirección" sin especificar a cuál te refieres
 
+# INSTRUCCIONES CRÍTICAS
+- SIEMPRE incluye una pregunta específica al final de tu mensaje, NUNCA uses el campo "nextQuestion".
+- SIEMPRE menciona los comandos que puede utilizar el usuario cuando sea necesario.
+- NUNCA des por terminada la conversación hasta que todos los datos estén completos
+- Recolecta UN DATO A LA VEZ, no pidas múltiples datos en una misma pregunta
+- Si ya tienes el tipo de reclamo, pregunta por la descripción detallada
+- Si ya tienes la descripción, pregunta por la ubicación exacta
+- Si ya tienes la ubicación, pregunta por el nombre completo
+- Si ya tienes el nombre, pregunta por el DNI
+- Si ya tienes el DNI, pregunta por la dirección
+- Cuando tengas todos los datos, solicita confirmación
+
+# TIPOS DE RECLAMOS DISPONIBLES
+${Object.entries(ComplaintTypes)
+  .map(([key, value]) => `   - ${key}: ${value}`)
+  .join('\n')}
+`;
+  } else if (mode === ConversationMode.INFO) {
+    modeSpecificPrompt = `
+# MODO ACTUAL: INFORMACIÓN
+Tu función principal es proporcionar información detallada sobre servicios, trámites y temas municipales.
+
 # INSTRUCCIONES PARA RESPONDER CONSULTAS INFORMATIVAS
 - Proporciona respuestas DETALLADAS y COMPLETAS basadas en la información de los documentos
 - SIEMPRE INCLUYE TODOS LOS DATOS RELEVANTES en el campo "message", nunca los omitas.
@@ -480,33 +735,39 @@ Debes recolectar la siguiente información en este orden:
 - Si no encuentras información específica sobre la consulta, indícalo claramente y ofrece alternativas
 - NUNCA respondas con "¿Te gustaría que te los detalle?" o frases similares en el campo "message" - SE PROACTIVO, MENCIONA LOS DETALLES SIN ESPERAR A QUE EL USUARIO LOS PREGUNTE.
 - SIEMPRE aclara que tú información puede no ser actualizada o puede no ser 100% precisa, y que lo mejor es que se contacten con la municipalidad o accedan a su sitio web. 
+`;
+  } else {
+    // Modo DEFAULT
+    modeSpecificPrompt = `
+# MODO ACTUAL: GENERAL
+Puedes ayudar tanto con reclamos como con consultas informativas.
 
-# INSTRUCCIONES CRÍTICAS
-- SIEMPRE incluye una pregunta específica al final de tu mensaje, NUNCA uses el campo "nextQuestion".
-- SIEMPRE menciona los comandos que puede utilizar el usuario cuando sea necesario.
-- NUNCA des por terminada la conversación hasta que todos los datos estén completos
-- Recolecta UN DATO A LA VEZ, no pidas múltiples datos en una misma pregunta
-- Si ya tienes el tipo de reclamo, pregunta por la descripción detallada
-- Si ya tienes la descripción, pregunta por la ubicación exacta
-- Si ya tienes la ubicación, pregunta por el nombre completo
-- Si ya tienes el nombre, pregunta por el DNI
-- Si ya tienes el DNI, pregunta por la dirección
-- Cuando tengas todos los datos, solicita confirmación
+# MANEJO DE RECLAMOS
+Si el usuario menciona un problema o reclamo, debes recolectar la siguiente información en este orden:
+1. Tipo de reclamo (identificar de la conversación)
+2. Descripción detallada del problema
+3. Ubicación exacta del problema (dirección donde se encuentra el problema)
+4. Nombre completo del ciudadano
+5. Número de DNI
+6. Dirección del ciudadano (donde vive el ciudadano)
 
-# COMANDOS DISPONIBLES
-- /ayuda - Muestra todos los comandos disponibles
-- /estado - Muestra el estado del reclamo actual
-- /cancelar - Cancela el reclamo en curso
-- /reiniciar - Comienza una nueva conversación
-- /confirmar - Guarda el reclamo cuando se solicite
-- /misreclamos - Muestra todos tus reclamos anteriores
-- /reclamo <número> - Muestra los detalles de un reclamo específico
+# DISTINCIÓN ENTRE UBICACIÓN DEL PROBLEMA Y DIRECCIÓN DEL CIUDADANO
+- La "ubicación" (location) se refiere a DÓNDE ESTÁ EL PROBLEMA que se reporta (ej: "El poste de luz está en Av. Aconquija y Bascary")
+- La "dirección" (address) se refiere a DÓNDE VIVE EL CIUDADANO que hace el reclamo (ej: "Vivo en Perú 489, Tafí Viejo")
 
-# TIPOS DE RECLAMOS DISPONIBLES
-${Object.entries(ComplaintTypes)
-  .map(([key, value]) => `   - ${key}: ${value}`)
-  .join('\n')}
+# INSTRUCCIONES PARA RESPONDER CONSULTAS INFORMATIVAS
+- Proporciona respuestas DETALLADAS y COMPLETAS basadas en la información de los documentos
+- SIEMPRE INCLUYE TODOS LOS DATOS RELEVANTES en el campo "message", nunca los omitas.
+- Incluye TODOS los datos relevantes como requisitos, procedimientos, horarios, ubicaciones, etc.
+- SIEMPRE utiliza toda la información relevante de los documentos para dar una respuesta completa
+- Cuando respondas sobre trámites o procedimientos, incluye TODOS los pasos necesarios
+- Si hay requisitos específicos, enuméralos TODOS
+- NUNCA respondas con "¿Te gustaría que te los detalle?" o frases similares - SE PROACTIVO, MENCIONA LOS DETALLES SIN ESPERAR A QUE EL USUARIO LOS PREGUNTE.
+`;
+  }
 
+  // Ejemplos de respuestas correctas
+  const examplesPrompt = `
 # EJEMPLOS DE RESPUESTAS CORRECTAS
 
 ## Ejemplo 1: Inicio de conversación
@@ -600,4 +861,62 @@ Debes responder en formato JSON con la siguiente estructura:
   }
 }
 `;
+
+  // Combinar todas las partes del prompt
+  return `${basePrompt}${modeSpecificPrompt}${examplesPrompt}`;
+}
+
+// Exportar la función por defecto para compatibilidad con código existente
+export default generateText;
+
+// Función para verificar si un reclamo está listo para guardar
+export function isReadyToSave(complaintData: any): boolean {
+  console.log('Verificando si el reclamo está listo para guardar:', JSON.stringify(complaintData, null, 2));
+  
+  // Verificar que todos los campos requeridos estén presentes y no estén vacíos
+  if (!complaintData) {
+    console.log('No hay datos de reclamo');
+    return false;
+  }
+
+  const hasType = !!complaintData.type && complaintData.type.trim() !== '';
+  const hasDescription = !!complaintData.description && complaintData.description.trim() !== '';
+  const hasLocation = !!complaintData.location && complaintData.location.trim() !== '';
+  
+  const hasCitizenData = !!complaintData.citizenData;
+  const hasName = hasCitizenData && !!complaintData.citizenData.name && complaintData.citizenData.name.trim() !== '';
+  const hasDocumentId = hasCitizenData && !!complaintData.citizenData.documentId && complaintData.citizenData.documentId.trim() !== '';
+  const hasAddress = hasCitizenData && !!complaintData.citizenData.address && complaintData.citizenData.address.trim() !== '';
+  
+  // Logging detallado para facilitar la depuración
+  console.log('Verificación de campos:');
+  console.log(`- Tipo: ${hasType ? 'OK' : 'FALTA'}`);
+  console.log(`- Descripción: ${hasDescription ? 'OK' : 'FALTA'}`);
+  console.log(`- Ubicación: ${hasLocation ? 'OK' : 'FALTA'}`);
+  console.log(`- Datos del ciudadano: ${hasCitizenData ? 'OK' : 'FALTA'}`);
+  console.log(`- Nombre: ${hasName ? 'OK' : 'FALTA'}`);
+  console.log(`- DNI: ${hasDocumentId ? 'OK' : 'FALTA'}`);
+  console.log(`- Dirección: ${hasAddress ? 'OK' : 'FALTA'}`);
+  
+  // Todos los campos deben estar presentes y no vacíos
+  const isReady = hasType && hasDescription && hasLocation && hasName && hasDocumentId && hasAddress;
+  console.log(`Reclamo listo para guardar: ${isReady ? 'SÍ' : 'NO'}`);
+  
+  return isReady;
+}
+
+// Función para detectar si un mensaje parece una consulta informativa
+function isLikelyInformationQuery(message: string): boolean {
+  // Palabras clave que indican una consulta informativa
+  const infoKeywords = [
+    'dónde', 'donde', 'cómo', 'como', 'cuándo', 'cuando', 'qué', 'que', 'cuál', 'cual',
+    'horario', 'ubicación', 'ubicacion', 'dirección', 'direccion', 'requisitos', 'trámite', 'tramite',
+    'información', 'informacion', 'consulta', 'ayuda', 'servicio', 'oficina', 'teléfono', 'telefono',
+    'email', 'correo', 'contacto', 'precio', 'costo', 'tarifa', 'documento', 'formulario'
+  ];
+  
+  const lowerMessage = message.toLowerCase();
+  
+  // Verificar si el mensaje contiene alguna de las palabras clave
+  return infoKeywords.some(keyword => lowerMessage.includes(keyword));
 }

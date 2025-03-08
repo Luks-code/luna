@@ -12,7 +12,7 @@ import {
   redis
 } from './redis';
 import { handleCommand } from './commands';
-import { IntentType } from './types';
+import { IntentType, ConversationMode } from './types';
 
 export async function sendWhatsAppMessage(to: string, message: string) {
   const token = process.env.WHATSAPP_TOKEN;
@@ -105,18 +105,6 @@ export function setupWhatsAppWebhook(app: Express) {
       // Obtener el historial de mensajes
       const messageHistory = await getMessageHistory(from);
 
-      // Manejar comandos especiales
-      if (userText.startsWith('/')) {
-        const commandText = userText.substring(1);
-        // Añadir el comando al historial (solo una vez)
-        await addMessageToHistory(from, 'user', userText);
-        await handleCommand(from, commandText, conversationState);
-        return;
-      }
-
-      // Añadir el mensaje del usuario al historial (solo una vez)
-      await addMessageToHistory(from, 'user', userText);
-
       // Manejar confirmación si está pendiente
       if (conversationState.awaitingConfirmation || conversationState.confirmationRequested) {
         const upperText = userText.toUpperCase();
@@ -170,6 +158,18 @@ export function setupWhatsAppWebhook(app: Express) {
         
         return;
       }
+
+      // Manejar comandos especiales
+      if (userText.startsWith('/')) {
+        const commandText = userText.substring(1);
+        // Añadir el comando al historial (solo una vez)
+        await addMessageToHistory(from, 'user', userText);
+        await handleCommand(from, commandText, conversationState);
+        return;
+      }
+
+      // Añadir el mensaje del usuario al historial (solo una vez)
+      await addMessageToHistory(from, 'user', userText);
 
       // Procesar mensaje
       await processMessage(from, userText, conversationState, messageHistory);
@@ -313,6 +313,13 @@ async function processMessage(from: string, message: string, conversationState?:
     conversationState.conversationTopics.push(possibleTopic);
   }
 
+  // Actualizar el modo de conversación basado en la respuesta
+  if (response.isComplaint && conversationState.mode !== ConversationMode.COMPLAINT) {
+    // Si detectamos un reclamo y no estamos en modo COMPLAINT, cambiar al modo COMPLAINT
+    conversationState.previousMode = conversationState.mode;
+    conversationState.mode = ConversationMode.COMPLAINT;
+  }
+
   // Actualizar campos pendientes si es un reclamo
   if (response.isComplaint) {
     const pendingFields = [];
@@ -366,6 +373,21 @@ async function processMessage(from: string, message: string, conversationState?:
       conversationState.currentIntent === IntentType.COMPLAINT &&
       conversationState.previousIntent !== IntentType.COMPLAINT) {
     responseMessage += "\n\nVolvamos a tu reclamo anterior. ";
+  }
+  
+  // Añadir información sobre el cambio de modo si es relevante
+  if (conversationState.mode === ConversationMode.COMPLAINT && 
+      !conversationState.modeChangeMessageSent) {
+    // Si estamos en modo COMPLAINT y no se ha enviado el mensaje, mostrarlo
+    responseMessage = "He detectado que estás intentando hacer un reclamo, así que he cambiado al modo de reclamos para ayudarte mejor.\n\n" + responseMessage;
+    // Marcar que ya se envió el mensaje de cambio de modo
+    conversationState.modeChangeMessageSent = true;
+  } else if (conversationState.mode === ConversationMode.INFO && 
+             !conversationState.modeChangeMessageSent) {
+    // Si estamos en modo INFO y no se ha enviado el mensaje, mostrarlo
+    responseMessage = "He cambiado al modo de información para proporcionarte detalles más completos.\n\n" + responseMessage;
+    // Marcar que ya se envió el mensaje de cambio de modo
+    conversationState.modeChangeMessageSent = true;
   }
   
   // Enviar respuesta
