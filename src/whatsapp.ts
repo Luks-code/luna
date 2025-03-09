@@ -430,6 +430,14 @@ async function processMessage(from: string, message: string, conversationState?:
         ...response.data.citizenData
       }
     };
+    
+    // Log para depuración
+    console.log('[Luna] Datos del reclamo actualizados:', JSON.stringify(conversationState.complaintData, null, 2));
+    
+    // Verificar si la dirección se actualizó correctamente
+    if (response.data?.citizenData?.address) {
+      console.log(`[Luna] Dirección actualizada: ${response.data.citizenData.address}`);
+    }
   }
 
   // Guardar el estado actualizado

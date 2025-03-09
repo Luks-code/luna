@@ -104,7 +104,9 @@ async function generateResponseWithRAG(message: string, conversationState: Conve
     
     // 1. Buscar documentos relevantes
     console.log('[RAG] Buscando documentos relevantes...');
-    const relevantDocs = await queryDocuments(queryToUse, 5);
+    const queryResult = await queryDocuments(queryToUse, 5);
+    const relevantDocs = queryResult.results;
+    const confidenceInfo = queryResult.confidence;
     
     // 2. Si no hay resultados relevantes, usar el flujo normal
     if (relevantDocs.length === 0) {
@@ -112,15 +114,28 @@ async function generateResponseWithRAG(message: string, conversationState: Conve
       return generateStandardResponse(message, conversationState, messageHistory);
     }
     
-    // 3. Preparar el contexto con la información recuperada
-    console.log(`[RAG] Preparando contexto con ${relevantDocs.length} documentos relevantes`);
+    // 3. Verificar si la información es confiable
+    if (!confidenceInfo.isReliable) {
+      console.log(`[RAG] Información no confiable (${confidenceInfo.confidence.toFixed(2)}): ${confidenceInfo.reason}`);
+      
+      // Generar una respuesta indicando que no tenemos información precisa
+      return {
+        isComplaint: false,
+        message: `Lo siento, no tengo información precisa sobre tu consulta. ${getNoInfoRecommendation(message)}`,
+        // Añadir flag para indicar que no se debe completar esta respuesta
+        skipCompletion: true
+      };
+    }
+    
+    // 4. Preparar el contexto con la información recuperada
+    console.log(`[RAG] Preparando contexto con ${relevantDocs.length} documentos relevantes (confianza: ${confidenceInfo.confidence.toFixed(2)})`);
     const context = formatDocumentsForContext(relevantDocs);
     
-    // 4. Generar la respuesta incluyendo el contexto
+    // 5. Generar la respuesta incluyendo el contexto
     console.log('[RAG] Generando respuesta con contexto enriquecido');
     const systemPrompt = getSystemPrompt(conversationState);
     
-    // 5. Construir el prompt completo con el contexto de los documentos y recordatorios adicionales
+    // 6. Construir el prompt completo con el contexto de los documentos y recordatorios adicionales
     const fullPrompt = `${systemPrompt}
 
 ### RECORDATORIO IMPORTANTE:
@@ -143,7 +158,7 @@ ${message}
 
 ### Genera una respuesta:`;
     
-    // 6. Llamar a la API de OpenAI con el contexto enriquecido
+    // 7. Llamar a la API de OpenAI con el contexto enriquecido
     const response = await callOpenAI(fullPrompt);
     console.log('[RAG] Respuesta generada exitosamente usando RAG');
     
@@ -156,6 +171,51 @@ ${message}
   }
 }
 
+// Función para generar recomendaciones cuando no hay información precisa
+function getNoInfoRecommendation(message: string): string {
+  // Detectar el tipo de consulta para dar una recomendación más específica
+  const lowerMessage = message.toLowerCase();
+  
+  // Patrones comunes de consultas
+  const patterns = {
+    tramites: ['trámite', 'tramite', 'gestión', 'gestion', 'solicitud', 'formulario'],
+    horarios: ['horario', 'hora', 'abierto', 'cerrado', 'atienden'],
+    ubicacion: ['dónde', 'donde', 'ubicación', 'ubicacion', 'dirección', 'direccion'],
+    contacto: ['teléfono', 'telefono', 'email', 'correo', 'contacto', 'comunicarme'],
+    requisitos: ['requisito', 'necesito', 'documento', 'documentación', 'documentacion']
+  };
+  
+  // Determinar el tipo de consulta
+  let queryType = 'general';
+  for (const [type, keywords] of Object.entries(patterns)) {
+    if (keywords.some(keyword => lowerMessage.includes(keyword))) {
+      queryType = type;
+      break;
+    }
+  }
+  
+  // Generar recomendación según el tipo de consulta
+  switch (queryType) {
+    case 'tramites':
+      return "Para obtener información precisa sobre este trámite, te recomiendo contactar directamente a la Municipalidad de Tafí Viejo. También puedes visitar el sitio web oficial: www.tafiviejo.gob.ar";
+    
+    case 'horarios':
+      return "Para confirmar los horarios actualizados, te recomiendo contactar a la Municipalidad de Tafí Viejo o acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo.";
+    
+    case 'ubicacion':
+      return "Para obtener la ubicación exacta, puedes contactar a la Municipalidad de Tafí Viejo o acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo.";
+    
+    case 'contacto':
+      return "Para obtener los datos de contacto actualizados, te recomiendo contactar a la Municipalidad de Tafí Viejo o visitar el sitio web oficial: www.tafiviejo.gob.ar";
+    
+    case 'requisitos':
+      return "Para conocer los requisitos exactos y actualizados, te recomiendo contactar directamente a la Municipalidad de Tafí Viejo o acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo.";
+    
+    default:
+      return "Te recomiendo contactar directamente a la Municipalidad de Tafí Viejo, acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo, o visitar el sitio web oficial: www.tafiviejo.gob.ar para obtener información precisa sobre tu consulta.";
+  }
+}
+
 // Función para verificar si todos los datos del reclamo están completos
 function isComplaintDataComplete(state: ConversationState): boolean {
   if (!state.isComplaintInProgress || !state.complaintData) {
@@ -163,14 +223,29 @@ function isComplaintDataComplete(state: ConversationState): boolean {
   }
   
   const data = state.complaintData;
-  return !!(
-    data.type && 
-    data.description && 
-    data.location && 
-    data.citizenData?.name && 
-    data.citizenData?.documentId && 
-    data.citizenData?.address
-  );
+  
+  // Verificar cada campo individualmente para facilitar la depuración
+  const hasType = !!data.type;
+  const hasDescription = !!data.description;
+  const hasLocation = !!data.location;
+  const hasName = !!data.citizenData?.name;
+  const hasDocumentId = !!data.citizenData?.documentId;
+  const hasAddress = !!data.citizenData?.address;
+  
+  // Registrar el estado de cada campo para depuración
+  console.log('[Luna] Verificando completitud de datos del reclamo:');
+  console.log(`- Tipo: ${hasType ? 'Completo' : 'Pendiente'} (${data.type || 'undefined'})`);
+  console.log(`- Descripción: ${hasDescription ? 'Completo' : 'Pendiente'} (${data.description || 'undefined'})`);
+  console.log(`- Ubicación: ${hasLocation ? 'Completo' : 'Pendiente'} (${data.location || 'undefined'})`);
+  console.log(`- Nombre: ${hasName ? 'Completo' : 'Pendiente'} (${data.citizenData?.name || 'undefined'})`);
+  console.log(`- DNI: ${hasDocumentId ? 'Completo' : 'Pendiente'} (${data.citizenData?.documentId || 'undefined'})`);
+  console.log(`- Dirección: ${hasAddress ? 'Completo' : 'Pendiente'} (${data.citizenData?.address || 'undefined'})`);
+  
+  // Verificar si todos los campos están completos
+  const isComplete = hasType && hasDescription && hasLocation && hasName && hasDocumentId && hasAddress;
+  console.log(`[Luna] Reclamo ${isComplete ? 'COMPLETO' : 'INCOMPLETO'}`);
+  
+  return isComplete;
 }
 
 // Función para verificar si se ha solicitado confirmación
@@ -379,7 +454,7 @@ export async function generateText(message: string, conversationState?: Conversa
     }
     
     // Validar la completitud de la respuesta
-    if (!validateResponseCompleteness(response)) {
+    if (!validateResponseCompleteness(response) && !response.skipCompletion) {
       console.log('[Luna] Respuesta detectada como incompleta, intentando completarla...');
       
       // Añadir instrucción específica para completar
@@ -461,6 +536,54 @@ async function processComplaintMode(message: string, state: ConversationState, h
   const complaintComplete = isComplaintDataComplete(state);
   const confirmationRequested = hasRequestedConfirmation(state);
   
+  console.log(`[Luna] Estado de confirmación: completo=${complaintComplete}, confirmationRequested=${confirmationRequested}, awaitingConfirmation=${state.awaitingConfirmation}`);
+  
+  // Si el mensaje parece ser una dirección y no tenemos la dirección guardada aún
+  if (!state.complaintData?.citizenData?.address && message.length > 5 && !message.toLowerCase().includes('confirmar') && !message.toLowerCase().includes('cancelar')) {
+    console.log('[Luna] Posible dirección detectada, actualizando datos del ciudadano');
+    
+    // Actualizar la dirección en los datos del ciudadano
+    if (!state.complaintData.citizenData) {
+      state.complaintData.citizenData = {
+        name: undefined,
+        documentId: undefined,
+        address: message.trim()
+      };
+    } else {
+      state.complaintData.citizenData.address = message.trim();
+    }
+    
+    console.log(`[Luna] Dirección actualizada: ${state.complaintData.citizenData.address}`);
+    
+    // Verificar nuevamente si el reclamo está completo después de actualizar la dirección
+    const updatedComplaintComplete = isComplaintDataComplete(state);
+    
+    if (updatedComplaintComplete) {
+      console.log('[Luna] Reclamo completo después de actualizar la dirección, solicitando confirmación');
+      
+      // Crear un resumen de los datos del reclamo
+      const complaintSummary = `
+• Tipo: ${state.complaintData.type}
+• Descripción: ${state.complaintData.description}
+• Ubicación del problema: ${state.complaintData.location}
+• Nombre: ${state.complaintData.citizenData.name}
+• DNI: ${state.complaintData.citizenData.documentId}
+• Dirección de residencia: ${state.complaintData.citizenData.address}
+      `;
+      
+      // Actualizar el estado para indicar que se ha solicitado confirmación
+      state.confirmationRequested = true;
+      state.awaitingConfirmation = true;
+      
+      // Devolver una respuesta que solicite confirmación explícita
+      return {
+        isComplaint: true,
+        message: `Gracias por proporcionar tu dirección de residencia, ${state.complaintData.citizenData.name}. He registrado que vives en ${state.complaintData.citizenData.address}. Ahora tengo todos los datos necesarios para tu reclamo sobre ${state.complaintData.description} en ${state.complaintData.location}:\n\n${complaintSummary.trim()}\n\nPor favor, responde CONFIRMAR para guardar el reclamo o CANCELAR para descartarlo. ¿Deseas proceder?`,
+        data: state.complaintData
+      };
+    }
+  }
+  
   // Si el reclamo está completo y no se ha solicitado confirmación, forzar la solicitud
   if (complaintComplete && !confirmationRequested && !message.toLowerCase().includes('confirmar') && !message.toLowerCase().includes('cancelar')) {
     console.log('[Luna] Reclamo completo detectado, solicitando confirmación explícita');
@@ -468,12 +591,12 @@ async function processComplaintMode(message: string, state: ConversationState, h
     // Crear un resumen de los datos del reclamo
     const complaintData = state.complaintData!;
     const complaintSummary = `
-Tipo de reclamo: ${complaintData.type}
-Descripción: ${complaintData.description}
-Ubicación: ${complaintData.location}
-Nombre: ${complaintData.citizenData?.name}
-DNI: ${complaintData.citizenData?.documentId}
-Dirección: ${complaintData.citizenData?.address}
+• Tipo: ${complaintData.type}
+• Descripción: ${complaintData.description}
+• Ubicación: ${complaintData.location}
+• Nombre: ${complaintData.citizenData?.name}
+• DNI: ${complaintData.citizenData?.documentId}
+• Dirección: ${complaintData.citizenData?.address}
     `;
     
     // Actualizar el estado para indicar que se ha solicitado confirmación
@@ -573,22 +696,124 @@ async function processDefaultMode(message: string, state: ConversationState, his
   // Detectar si el mensaje parece un reclamo
   const complaintKeywords = [
     'reclamo', 'queja', 'problema', 'falla', 'arreglar', 'roto', 'dañado', 
-    'no funciona', 'mal estado', 'denunciar', 'reportar'
+    'no funciona', 'mal estado', 'denunciar', 'reportar', 'basurero', 'basural',
+    'acumulación', 'acumulacion', 'montón', 'monton', 'tiradero', 'tirar', 'tiran',
+    'abandonado', 'abandonan', 'desechos', 'residuos', 'escombros', 'suciedad',
+    'sucio', 'inundación', 'inundacion', 'agua', 'pozo', 'bache', 'rotura',
+    'rotura de caño', 'caño roto', 'vereda rota', 'calle rota', 'luz quemada',
+    'falta de luz', 'alumbrado', 'luminaria', 'semáforo', 'semaforo', 'tránsito',
+    'transito', 'accidente', 'peligro', 'peligroso', 'inseguro', 'inseguridad',
+    'vandalismo', 'robo', 'hurto', 'delincuencia', 'ruido', 'ruidos', 'molestia',
+    'molesto', 'olor', 'olores', 'peste', 'contaminación', 'contaminacion',
+    'animales', 'perros', 'gatos', 'ratas', 'plagas', 'insectos', 'mosquitos',
+    'fumigación', 'fumigacion', 'maleza', 'pasto', 'pasto alto', 'yuyos', 'baldío',
+    'baldio', 'terreno', 'vecino', 'vecinos', 'molestan', 'molesta', 'árbol', 'arbol',
+    'caerse', 'caído', 'caido', 'rama', 'tronco'
+  ];
+  
+  // Patrones específicos que indican reclamos (expresiones regulares)
+  const complaintPatterns = [
+    /\b(hay|existe|se (está|esta) formando|se (formó|formo)|tienen|tiran|dejan|abandonan)\b.{0,30}\b(basur[ao]|residuos|desechos|escombros|agua|inundaci[óo]n)\b/i,
+    /\b(est[áa] (rot[ao]|da[ñn]ad[ao]|abandon[ao]d[ao]|suci[ao]|inundad[ao]))\b/i,
+    /\b(no (funciona|anda|sirve|hay))\b.{0,20}\b(luz|agua|gas|servicio|recolecci[óo]n|alumbrado|sem[áa]foro)\b/i,
+    /\b(afuera|frente|cerca|al lado)\b.{0,30}\b(de (mi|la|nuestra) casa|del edificio|del barrio)\b/i,
+    /\b(vivo en|mi direcci[óo]n es|mi casa est[áa] en|en la calle)\b/i,
+    /\b(hace (días|dias|semanas|meses))\b.{0,30}\b(que (está|esta|hay|tienen|no pasan|no vienen))\b/i,
+    /\b(no pueden|no podemos|imposible)\b.{0,30}\b(jugar|caminar|transitar|pasar|usar)\b/i,
+    /\b([áa]rbol|poste|rama|tronco)\b.{0,30}\b(ca(ído|ido|erse|yendo)|peligro|roto)\b/i,
+    /\b(reportar|avisar|informar)\b.{0,30}\b(que hay|sobre|acerca)\b/i
   ];
   
   const lowerMessage = message.toLowerCase();
-  const isLikelyComplaint = complaintKeywords.some(keyword => lowerMessage.includes(keyword));
   
-  // Si parece un reclamo y no hay uno en progreso, cambiar al modo de reclamo
-  if (isLikelyComplaint && !state.isComplaintInProgress) {
-    console.log('[Luna] Mensaje detectado como posible reclamo, cambiando a modo COMPLAINT');
+  // Verificar palabras clave
+  const hasComplaintKeyword = complaintKeywords.some(keyword => lowerMessage.includes(keyword));
+  
+  // Verificar patrones específicos
+  const matchesComplaintPattern = complaintPatterns.some(pattern => pattern.test(message));
+  
+  // Detección basada en patrones (primera fase - rápida)
+  const isLikelyComplaintByPatterns = hasComplaintKeyword || matchesComplaintPattern;
+  
+  // Verificar si hay un mensaje mixto (consulta informativa + reclamo)
+  const informationKeywords = ['información', 'informacion', 'consulta', 'trámite', 'tramite', 'requisito', 'horario', 'dónde', 'donde', 'cómo', 'como'];
+  const hasInformationKeywords = informationKeywords.some(keyword => lowerMessage.includes(keyword));
+  
+  // Patrones que indican una transición a un nuevo tema o reclamo
+  const transitionPatterns = [
+    /\b(tambi[ée]n|adem[áa]s|por cierto|de paso|otra cosa)\b/i,
+    /\b(y|,)\s+(hay|existe|est[áa])\b/i
+  ];
+  
+  const hasTransitionPattern = transitionPatterns.some(pattern => pattern.test(message));
+  
+  // Detectar mensaje mixto (información + reclamo)
+  const isMixedMessage = hasInformationKeywords && (hasComplaintKeyword || matchesComplaintPattern) && hasTransitionPattern;
+  
+  // Si es un mensaje mixto, extraer la parte de reclamo
+  let complaintPart = message;
+  if (isMixedMessage) {
+    console.log('[Luna] Mensaje mixto detectado, extrayendo parte de reclamo');
+    
+    // Buscar el punto donde comienza la transición
+    const transitionIndices: number[] = [];
+    transitionPatterns.forEach(pattern => {
+      const match = pattern.exec(message);
+      if (match) {
+        transitionIndices.push(match.index);
+      }
+    });
+    
+    // Si encontramos puntos de transición, usar el primero
+    if (transitionIndices.length > 0) {
+      const transitionIndex = Math.min(...transitionIndices);
+      complaintPart = message.substring(transitionIndex);
+      console.log(`[Luna] Parte de reclamo extraída: "${complaintPart}"`);
+    }
+  }
+  
+  // Si hay un reclamo en progreso y el usuario parece estar haciendo una consulta informativa
+  // sin indicar que quiere cambiar de tema, mantener el contexto del reclamo
+  const isInformationQuery = isLikelyInformationQuery(message);
+  const isExplicitModeChange = message.toLowerCase().includes('cancelar') || 
+                              message.toLowerCase().includes('olvidar') || 
+                              message.toLowerCase().includes('cambiar de tema');
+  
+  // Si el usuario quiere explícitamente cambiar de modo, reseteamos el estado del reclamo
+  if (state.isComplaintInProgress && isExplicitModeChange) {
+    console.log('[Luna] Usuario solicitó cambio explícito de modo, reseteando estado de reclamo');
+    state.isComplaintInProgress = false;
+    state.complaintData = {
+      type: undefined,
+      description: "",
+      location: undefined,
+      citizenData: {
+        name: undefined,
+        documentId: undefined,
+        address: undefined
+      }
+    };
+    state.mode = ConversationMode.DEFAULT;
+    
+    return {
+      isComplaint: false,
+      message: "He cancelado el reclamo en progreso. ¿En qué más puedo ayudarte?"
+    };
+  }
+  
+  // Si es claramente un reclamo por patrones o un mensaje mixto con parte de reclamo,
+  // procesarlo como reclamo (incluso si hay uno en progreso, lo reemplazamos)
+  if ((isLikelyComplaintByPatterns || isMixedMessage) && 
+      (!state.isComplaintInProgress || hasTransitionPattern)) {
+    
+    console.log('[Luna] Mensaje detectado como reclamo por patrones, cambiando a modo COMPLAINT');
     state.mode = ConversationMode.COMPLAINT;
     state.isComplaintInProgress = true;
     
-    // Inicializar datos del reclamo
+    // Inicializar datos del reclamo con la parte relevante del mensaje
     state.complaintData = {
       type: undefined,
-      description: message,  // Usar el mensaje como descripción inicial
+      description: isMixedMessage ? complaintPart : message,
       location: undefined,
       citizenData: {
         name: undefined,
@@ -597,9 +822,40 @@ async function processDefaultMode(message: string, state: ConversationState, his
       }
     };
     
-    return await processComplaintMode(message, state, history);
+    return await processComplaintMode(isMixedMessage ? complaintPart : message, state, history);
   }
   
+  // Si no es claramente un reclamo por patrones, pero tampoco parece claramente una consulta informativa,
+  // usar IA para clasificar (segunda fase - más precisa pero más lenta)
+  if (!isLikelyComplaintByPatterns && !isInformationQuery && !state.isComplaintInProgress) {
+    console.log('[Luna] Mensaje ambiguo, utilizando IA para clasificar intención');
+    
+    // Clasificar intención con IA
+    const classification = await classifyMessageIntent(message);
+    
+    // Si la IA clasifica como reclamo con confianza suficiente
+    if (classification.isComplaint && classification.confidence >= 0.7) {
+      console.log('[Luna] IA clasificó el mensaje como reclamo (confianza: ' + classification.confidence + '), cambiando a modo COMPLAINT');
+      state.mode = ConversationMode.COMPLAINT;
+      state.isComplaintInProgress = true;
+      
+      // Inicializar datos del reclamo
+      state.complaintData = {
+        type: undefined,
+        description: message,
+        location: undefined,
+        citizenData: {
+          name: undefined,
+          documentId: undefined,
+          address: undefined
+        }
+      };
+      
+      return await processComplaintMode(message, state, history);
+    }
+  }
+  
+  // Si llegamos aquí, el mensaje no se considera un reclamo o ya hay uno en progreso
   // Para mensajes en modo DEFAULT, verificamos si debemos usar RAG según los criterios
   try {
     if (shouldUseRAG(message, state)) {
@@ -612,6 +868,83 @@ async function processDefaultMode(message: string, state: ConversationState, his
     console.error('[DEFAULT] Error al generar respuesta con RAG:', error);
     return await generateStandardResponse(message, state, history);
   }
+}
+
+// Función para clasificar la intención del mensaje usando IA
+async function classifyMessageIntent(message: string): Promise<{isComplaint: boolean, confidence: number}> {
+  try {
+    console.log('[Luna] Clasificando intención del mensaje usando IA');
+    
+    const prompt = `
+Eres un asistente especializado en clasificar mensajes para un chatbot municipal. Tu tarea es determinar si el siguiente mensaje del usuario tiene la intención de hacer un reclamo o reportar un problema que requiere intervención municipal.
+
+### Ejemplos de mensajes que SÍ son reclamos:
+- "La calle de mi barrio está llena de baches"
+- "Hace una semana que no pasa el camión de la basura por mi casa"
+- "Hay un árbol a punto de caerse frente a mi casa en Av. Belgrano 123"
+- "Los vecinos tiran basura en el terreno baldío de la esquina"
+- "El semáforo de la esquina de San Martín y Belgrano no funciona"
+- "Afuera de mi casa se está formando un basurero, vivo en Sargento Cabral altura 400"
+
+### Ejemplos de mensajes que NO son reclamos (son consultas informativas):
+- "¿Dónde puedo pagar mis impuestos municipales?"
+- "¿Cuál es el horario de atención de la municipalidad?"
+- "¿Qué documentos necesito para renovar mi licencia de conducir?"
+- "¿Cuándo es el próximo evento cultural en la plaza?"
+- "¿Cómo separo correctamente los residuos?"
+
+### Mensaje del usuario:
+"${message}"
+
+Clasifica este mensaje y responde en formato JSON con la siguiente estructura:
+{
+  "isComplaint": true/false,
+  "confidence": 0.0-1.0,
+  "reasoning": "Breve explicación de tu clasificación"
+}
+`;
+
+    // Llamar a la API
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: "system", content: prompt }],
+      response_format: { type: 'json_object' },
+      max_tokens: 500,
+      temperature: 0.1
+    });
+
+    // Parsear la respuesta
+    const result = JSON.parse(response.choices[0]?.message?.content || '{"isComplaint": false, "confidence": 0}');
+    console.log(`[Luna] Clasificación IA: ${result.isComplaint ? 'RECLAMO' : 'NO RECLAMO'} (Confianza: ${result.confidence})`);
+    
+    return {
+      isComplaint: result.isComplaint,
+      confidence: result.confidence
+    };
+  } catch (error) {
+    console.error('[Luna] Error al clasificar intención con IA:', error);
+    // En caso de error, asumir que no es un reclamo
+    return {
+      isComplaint: false,
+      confidence: 0
+    };
+  }
+}
+
+// Función para detectar si un mensaje parece una consulta informativa
+function isLikelyInformationQuery(message: string): boolean {
+  // Palabras clave que indican una consulta informativa
+  const infoKeywords = [
+    'dónde', 'donde', 'cómo', 'como', 'cuándo', 'cuando', 'qué', 'que', 'cuál', 'cual',
+    'horario', 'ubicación', 'ubicacion', 'dirección', 'direccion', 'requisitos', 'trámite', 'tramite',
+    'información', 'informacion', 'consulta', 'ayuda', 'servicio', 'oficina', 'teléfono', 'telefono',
+    'email', 'correo', 'contacto', 'precio', 'costo', 'tarifa', 'documento', 'formulario'
+  ];
+  
+  const lowerMessage = message.toLowerCase();
+  
+  // Verificar si el mensaje contiene alguna de las palabras clave
+  return infoKeywords.some(keyword => lowerMessage.includes(keyword));
 }
 
 // Función para verificar si es un comando específico
@@ -687,6 +1020,13 @@ Eres Nina, un asistente virtual de la Municipalidad de Tafí Viejo, Tucumán, Ar
 - NO uses el campo "nextQuestion" (está obsoleto).
 - Si estás recolectando datos para un reclamo, asegúrate de que el usuario sepa exactamente qué información necesitas a continuación.
 
+# SALUDOS INICIALES
+- Cuando saludes por primera vez o respondas a un saludo del usuario, SIEMPRE menciona que puedes ayudar con dos tipos de flujos:
+  1. Flujo de INFORMACIÓN: para responder consultas sobre trámites, servicios y temas municipales.
+  2. Flujo de RECLAMOS: para registrar y dar seguimiento a reclamos municipales.
+- Explica brevemente que el usuario puede usar /info para consultas informativas o iniciar directamente un reclamo describiendo su problema.
+- Mantén este mensaje inicial breve pero informativo.
+
 # COMANDOS DISPONIBLES
 - /ayuda - Muestra todos los comandos disponibles
 - /estado - Muestra el estado del reclamo actual
@@ -698,7 +1038,7 @@ Eres Nina, un asistente virtual de la Municipalidad de Tafí Viejo, Tucumán, Ar
 - /info - Cambia al modo de información
 - /consulta - Cambia al modo de información
 `;
-
+  
   // Instrucciones específicas según el modo
   let modeSpecificPrompt = '';
   
@@ -750,14 +1090,10 @@ Tu función principal es proporcionar información detallada sobre servicios, tr
 - Proporciona respuestas DETALLADAS y COMPLETAS basadas en la información de los documentos
 - SIEMPRE INCLUYE TODOS LOS DATOS RELEVANTES en el campo "message", nunca los omitas.
 - Incluye TODOS los datos relevantes como requisitos, procedimientos, horarios, ubicaciones, etc.
-- Estructura tu respuesta de manera clara con secciones si es necesario
-- No omitas información importante por brevedad
-- Si la información en los documentos es técnica, explícala en términos sencillos
 - SIEMPRE utiliza toda la información relevante de los documentos para dar una respuesta completa
 - Cuando respondas sobre trámites o procedimientos, incluye TODOS los pasos necesarios
 - Si hay requisitos específicos, enuméralos TODOS
-- Si no encuentras información específica sobre la consulta, indícalo claramente y ofrece alternativas
-- NUNCA respondas con "¿Te gustaría que te los detalle?" o frases similares en el campo "message" - SE PROACTIVO, MENCIONA LOS DETALLES SIN ESPERAR A QUE EL USUARIO LOS PREGUNTE.
+- NUNCA respondas con "¿Te gustaría que te dé más detalles?" o frases similares - SE PROACTIVO, MENCIONA LOS DETALLES SIN ESPERAR A QUE EL USUARIO LOS PREGUNTE.
 - SIEMPRE aclara que tú información puede no ser actualizada o puede no ser 100% precisa, y que lo mejor es que se contacten con la municipalidad o accedan a su sitio web. 
 `;
   } else {
@@ -786,7 +1122,7 @@ Si el usuario menciona un problema o reclamo, debes recolectar la siguiente info
 - SIEMPRE utiliza toda la información relevante de los documentos para dar una respuesta completa
 - Cuando respondas sobre trámites o procedimientos, incluye TODOS los pasos necesarios
 - Si hay requisitos específicos, enuméralos TODOS
-- NUNCA respondas con "¿Te gustaría que te los detalle?" o frases similares - SE PROACTIVO, MENCIONA LOS DETALLES SIN ESPERAR A QUE EL USUARIO LOS PREGUNTE.
+- NUNCA respondas con "¿Te gustaría que te dé más detalles?" o frases similares - SE PROACTIVO, MENCIONA LOS DETALLES SIN ESPERAR A QUE EL USUARIO LOS PREGUNTE.
 `;
   }
 
@@ -854,16 +1190,6 @@ message: "Los reclamos de alumbrado público suelen resolverse en un plazo de 3 
 
 Volvamos a tu reclamo anterior. Estábamos registrando un problema de poste de luz caído en la esquina de Avenida Aconquija y Bascary. ¿Deseas continuar con el registro del reclamo?"
 
-## Ejemplo 9: Confirmación
-Usuario: "CONFIRMAR"
-Asistente:
-message: "✅ Reclamo registrado exitosamente!
-Número de reclamo: #123
-Tipo: Alumbrado Público
-Estado: Pendiente de revisión
-
-La conversación será reiniciada. ¿En qué más puedo ayudarte?"
-
 ## Ejemplo 10: Comandos
 Usuario: "¿Cómo veo mis reclamos?"
 Asistente:
@@ -922,25 +1248,8 @@ export function isReadyToSave(complaintData: any): boolean {
   console.log(`- DNI: ${hasDocumentId ? 'OK' : 'FALTA'}`);
   console.log(`- Dirección: ${hasAddress ? 'OK' : 'FALTA'}`);
   
-  // Todos los campos deben estar presentes y no vacíos
   const isReady = hasType && hasDescription && hasLocation && hasName && hasDocumentId && hasAddress;
-  console.log(`Reclamo listo para guardar: ${isReady ? 'SÍ' : 'NO'}`);
+  console.log(`Reclamo ${isReady ? 'LISTO' : 'NO LISTO'} para guardar`);
   
   return isReady;
-}
-
-// Función para detectar si un mensaje parece una consulta informativa
-function isLikelyInformationQuery(message: string): boolean {
-  // Palabras clave que indican una consulta informativa
-  const infoKeywords = [
-    'dónde', 'donde', 'cómo', 'como', 'cuándo', 'cuando', 'qué', 'que', 'cuál', 'cual',
-    'horario', 'ubicación', 'ubicacion', 'dirección', 'direccion', 'requisitos', 'trámite', 'tramite',
-    'información', 'informacion', 'consulta', 'ayuda', 'servicio', 'oficina', 'teléfono', 'telefono',
-    'email', 'correo', 'contacto', 'precio', 'costo', 'tarifa', 'documento', 'formulario'
-  ];
-  
-  const lowerMessage = message.toLowerCase();
-  
-  // Verificar si el mensaje contiene alguna de las palabras clave
-  return infoKeywords.some(keyword => lowerMessage.includes(keyword));
 }

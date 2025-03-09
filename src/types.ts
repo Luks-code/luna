@@ -8,6 +8,11 @@ export interface GPTResponse {
    */
   nextQuestion?: string;
   message: string;
+  /**
+   * Si es true, indica que la respuesta no debe pasar por el proceso de completado
+   * Útil para respuestas donde no queremos que el modelo alucine información
+   */
+  skipCompletion?: boolean;
 }
 
 // Datos del reclamo

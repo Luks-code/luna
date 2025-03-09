@@ -83,6 +83,7 @@ export async function ingestDocument(filePath: string): Promise<boolean> {
     // 4. Inicializar embeddings
     const embeddings = new OpenAIEmbeddings({
       openAIApiKey: OPENAI_API_KEY,
+      modelName: 'text-embedding-3-small', // Especificar explícitamente el modelo
     });
     
     // 5. Obtener índice de Pinecone
