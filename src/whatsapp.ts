@@ -459,13 +459,13 @@ async function processMessage(from: string, message: string, conversationState?:
       // No mostrar el mensaje si estamos volviendo de modo INFO a COMPLAINT
       !(conversationState.previousMode === ConversationMode.INFO && conversationState.interruptedFlow)) {
     // Si estamos en modo COMPLAINT y no se ha enviado el mensaje, mostrarlo
-    responseMessage = "He detectado que estás intentando hacer un reclamo, así que he cambiado al modo de reclamos para ayudarte mejor.\n\n" + responseMessage;
+    responseMessage = "[RECLAMO] " + responseMessage;
     // Marcar que ya se envió el mensaje de cambio de modo
     conversationState.modeChangeMessageSent = true;
   } else if (conversationState.mode === ConversationMode.INFO && 
              !conversationState.modeChangeMessageSent) {
     // Si estamos en modo INFO y no se ha enviado el mensaje, mostrarlo
-    responseMessage = "He cambiado al modo de información para proporcionarte detalles más completos.\n\n" + responseMessage;
+    responseMessage = "[INFO] " + responseMessage;
     // Marcar que ya se envió el mensaje de cambio de modo
     conversationState.modeChangeMessageSent = true;
     

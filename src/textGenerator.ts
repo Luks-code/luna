@@ -197,22 +197,22 @@ function getNoInfoRecommendation(message: string): string {
   // Generar recomendación según el tipo de consulta
   switch (queryType) {
     case 'tramites':
-      return "Para obtener información precisa sobre este trámite, te recomiendo contactar directamente a la Municipalidad de Tafí Viejo. También puedes visitar el sitio web oficial: www.tafiviejo.gob.ar";
+      return "[INFO] Para obtener información precisa sobre este trámite, te recomiendo contactar directamente a la Municipalidad de Tafí Viejo. También puedes visitar el sitio web oficial: www.tafiviejo.gob.ar";
     
     case 'horarios':
-      return "Para confirmar los horarios actualizados, te recomiendo contactar a la Municipalidad de Tafí Viejo o acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo.";
+      return "[INFO] Para confirmar los horarios actualizados, te recomiendo contactar a la Municipalidad de Tafí Viejo o acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo.";
     
     case 'ubicacion':
-      return "Para obtener la ubicación exacta, puedes contactar a la Municipalidad de Tafí Viejo o acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo.";
+      return "[INFO] Para obtener la ubicación exacta, puedes contactar a la Municipalidad de Tafí Viejo o acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo.";
     
     case 'contacto':
-      return "Para obtener los datos de contacto actualizados, te recomiendo contactar a la Municipalidad de Tafí Viejo o visitar el sitio web oficial: www.tafiviejo.gob.ar";
+      return "[INFO] Para obtener los datos de contacto actualizados, te recomiendo contactar a la Municipalidad de Tafí Viejo o visitar el sitio web oficial: www.tafiviejo.gob.ar";
     
     case 'requisitos':
-      return "Para conocer los requisitos exactos y actualizados, te recomiendo contactar directamente a la Municipalidad de Tafí Viejo o acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo.";
+      return "[INFO] Para conocer los requisitos exactos y actualizados, te recomiendo contactar directamente a la Municipalidad de Tafí Viejo o acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo.";
     
     default:
-      return "Te recomiendo contactar directamente a la Municipalidad de Tafí Viejo, acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo, o visitar el sitio web oficial: www.tafiviejo.gob.ar para obtener información precisa sobre tu consulta.";
+      return "[INFO] Te recomiendo contactar directamente a la Municipalidad de Tafí Viejo, acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo, o visitar el sitio web oficial: www.tafiviejo.gob.ar para obtener información precisa sobre tu consulta.";
   }
 }
 
@@ -641,11 +641,6 @@ async function processInfoMode(message: string, state: ConversationState, histor
       
       // No reiniciar la bandera modeChangeMessageSent para evitar mostrar nuevamente el mensaje de cambio a modo COMPLAINT
       state.modeChangeMessageSent = true;
-      
-      // Agregar un recordatorio sobre el reclamo en progreso, pero solo si la respuesta no es muy larga
-      if (response.message.length < 500) {
-        response.message += "\n\nRecuerda que tienes un reclamo en progreso. ¿Deseas continuar con él o necesitas ayuda con algo más?";
-      }
     }
     
     return response;
@@ -662,11 +657,6 @@ async function processInfoMode(message: string, state: ConversationState, histor
       
       // No reiniciar la bandera modeChangeMessageSent para evitar mostrar nuevamente el mensaje de cambio a modo COMPLAINT
       state.modeChangeMessageSent = true;
-      
-      // Agregar un recordatorio sobre el reclamo en progreso, pero solo si la respuesta no es muy larga
-      if (response.message.length < 500) {
-        response.message += "\n\nRecuerda que tienes un reclamo en progreso. ¿Deseas continuar con él o necesitas ayuda con algo más?";
-      }
     }
     
     return response;
