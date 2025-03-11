@@ -132,7 +132,7 @@ export function setupWhatsAppWebhook(app: Express) {
           
           return;
         } else {
-          const promptMessage = 'Por favor, responde "CONFIRMAR" para guardar el reclamo o "CANCELAR" para descartarlo.';
+          const promptMessage = 'Por favor, responde únicamente CONFIRMAR para guardar el reclamo o CANCELAR para descartarlo. Al confirmar, aceptas que tus datos personales sean compartidos con la municipalidad y almacenados en nuestra base de datos para la gestión de tu reclamo.';
           await sendWhatsAppMessage(from, promptMessage);
           await addMessageToHistory(from, 'assistant', promptMessage);
           return;
@@ -309,7 +309,7 @@ async function processMessage(from: string, message: string, conversationState?:
       conversationState.complaintData = {};
     } else {
       // Cualquier otra entrada no es válida
-      responseMessage = "Por favor, responde únicamente CONFIRMAR para guardar el reclamo o CANCELAR para descartarlo.";
+      responseMessage = "Por favor, responde únicamente CONFIRMAR para guardar el reclamo o CANCELAR para descartarlo. Al confirmar, aceptas que tus datos personales sean compartidos con la municipalidad y almacenados en nuestra base de datos para la gestión de tu reclamo.";
     }
     
     // Guardar el estado actualizado
