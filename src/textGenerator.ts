@@ -5,28 +5,72 @@ import { ComplaintTypes } from './prisma';
 import { ChatCompletionMessageParam } from 'openai/resources/chat';
 import { queryDocuments, formatDocumentsForContext, getRelevantContext } from './rag/queryPinecone';
 
-// Función para extraer el tema principal de una consulta
-function extractMainTopic(message: string): string | null {
-  const lowercaseMessage = message.toLowerCase();
+// Caché simple para evitar llamadas repetidas a la API para mensajes idénticos
+const intentClassificationCache: Map<string, any> = new Map();
+
+// Función para extraer el tema principal de una consulta usando IA
+async function extractMainTopic(message: string): Promise<string | null> {
+  console.log('[Luna] Extrayendo tema principal usando IA para:', message);
   
-  // Lista de temas municipales comunes
-  const municipalTopics = [
-    { keywords: ['habilitación', 'habilitacion', 'comercial', 'negocio', 'local'], topic: 'habilitaciones_comerciales' },
-    { keywords: ['impuesto', 'tasa', 'tributo', 'pago', 'abl', 'municipal'], topic: 'impuestos_municipales' },
-    { keywords: ['obra', 'construcción', 'construccion', 'edificación', 'edificacion', 'permiso'], topic: 'obras_particulares' },
-    { keywords: ['trámite', 'tramite', 'gestión', 'gestion', 'documento'], topic: 'tramites_municipales' },
-    { keywords: ['servicio', 'municipal', 'público', 'publico'], topic: 'servicios_municipales' },
-    { keywords: ['reclamo', 'queja', 'denuncia'], topic: 'reclamos' }
-  ];
-  
-  // Buscar coincidencias con temas municipales
-  for (const { keywords, topic } of municipalTopics) {
-    if (keywords.some(keyword => lowercaseMessage.includes(keyword))) {
-      return topic;
+  try {
+    // Verificar si hay una entrada en caché para este mensaje
+    const cacheKey = `topic_${message.toLowerCase().trim()}`;
+    if (intentClassificationCache.has(cacheKey)) {
+      console.log('[Luna] Usando resultado en caché para extracción de tema');
+      const cachedResult = intentClassificationCache.get(cacheKey);
+      return cachedResult as string | null;
     }
+    
+    // Usar la API de OpenAI para clasificar el tema principal
+    const prompt = `
+Analiza el siguiente mensaje y determina a qué tema municipal se refiere.
+Los temas posibles son:
+- habilitaciones_comerciales (relacionado con habilitaciones de negocios, locales comerciales)
+- impuestos_municipales (relacionado con tasas, tributos, pagos municipales, ABL)
+- obras_particulares (relacionado con construcciones, edificaciones, permisos de obra)
+- tramites_municipales (relacionado con trámites, gestiones, documentos municipales)
+- servicios_municipales (relacionado con servicios públicos municipales)
+- reclamos (relacionado con quejas, denuncias, reclamos)
+
+Mensaje: "${message}"
+
+Responde con un JSON en el siguiente formato:
+{
+  "topic": "nombre_del_tema" (o null si no corresponde a ninguno de los temas listados),
+  "confidence": 0.0-1.0
+}
+`;
+
+    // Llamar a la API
+    const apiMessages: ChatCompletionMessageParam[] = [
+      {
+        role: "system",
+        content: prompt
+      }
+    ];
+
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: apiMessages,
+      response_format: { type: 'json_object' },
+      max_tokens: 150,
+      temperature: 0.1
+    });
+
+    const result = JSON.parse(response.choices[0]?.message?.content || '{}');
+    
+    // Solo considerar el tema si la confianza es suficiente
+    const topic = (result.confidence >= 0.6) ? result.topic : null;
+    
+    // Guardar en caché para futuras consultas
+    intentClassificationCache.set(cacheKey, topic);
+    
+    console.log(`[Luna] Tema principal detectado: ${topic || 'ninguno'} (confianza: ${result.confidence || 'N/A'})`);
+    return topic;
+  } catch (error) {
+    console.error('[Luna] Error al extraer tema principal:', error);
+    return null;
   }
-  
-  return null;
 }
 
 // Función para formatear el historial de mensajes
@@ -121,7 +165,7 @@ async function generateResponseWithRAG(message: string, conversationState: Conve
       // Generar una respuesta indicando que no tenemos información precisa
       return {
         isComplaint: false,
-        message: `Lo siento, no tengo información precisa sobre tu consulta. ${getNoInfoRecommendation(message)}`,
+        message: `Lo siento, no tengo información precisa sobre tu consulta.`,
         // Añadir flag para indicar que no se debe completar esta respuesta
         skipCompletion: true
       };
@@ -172,47 +216,96 @@ ${message}
 }
 
 // Función para generar recomendaciones cuando no hay información precisa
-function getNoInfoRecommendation(message: string): string {
-  // Detectar el tipo de consulta para dar una recomendación más específica
-  const lowerMessage = message.toLowerCase();
+async function getNoInfoRecommendation(message: string): Promise<string> {
+  console.log('[Luna] Generando recomendación para consulta sin información precisa usando IA');
   
-  // Patrones comunes de consultas
-  const patterns = {
-    tramites: ['trámite', 'tramite', 'gestión', 'gestion', 'solicitud', 'formulario'],
-    horarios: ['horario', 'hora', 'abierto', 'cerrado', 'atienden'],
-    ubicacion: ['dónde', 'donde', 'ubicación', 'ubicacion', 'dirección', 'direccion'],
-    contacto: ['teléfono', 'telefono', 'email', 'correo', 'contacto', 'comunicarme'],
-    requisitos: ['requisito', 'necesito', 'documento', 'documentación', 'documentacion']
-  };
-  
-  // Determinar el tipo de consulta
-  let queryType = 'general';
-  for (const [type, keywords] of Object.entries(patterns)) {
-    if (keywords.some(keyword => lowerMessage.includes(keyword))) {
-      queryType = type;
-      break;
+  try {
+    // Verificar si hay una entrada en caché para este mensaje
+    const cacheKey = `rec_${message.toLowerCase().trim()}`;
+    if (intentClassificationCache.has(cacheKey)) {
+      console.log('[Luna] Usando resultado en caché para recomendación');
+      const cachedResult = intentClassificationCache.get(cacheKey);
+      return cachedResult as string;
     }
-  }
-  
-  // Generar recomendación según el tipo de consulta
-  switch (queryType) {
-    case 'tramites':
-      return "[INFO] Para obtener información precisa sobre este trámite, te recomiendo contactar directamente a la Municipalidad de Tafí Viejo. También puedes visitar el sitio web oficial: www.tafiviejo.gob.ar";
     
-    case 'horarios':
-      return "[INFO] Para confirmar los horarios actualizados, te recomiendo contactar a la Municipalidad de Tafí Viejo o acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo.";
+    // Usar la API de OpenAI para clasificar el tipo de consulta
+    const prompt = `
+Analiza el siguiente mensaje y determina a qué categoría de consulta municipal pertenece.
+Las categorías posibles son:
+- tramites (relacionado con trámites, gestiones, solicitudes, formularios)
+- horarios (relacionado con horarios de atención, apertura, cierre)
+- ubicacion (relacionado con ubicaciones, direcciones, lugares)
+- contacto (relacionado con teléfonos, emails, formas de contacto)
+- requisitos (relacionado con requisitos, documentos necesarios)
+- general (si no encaja en ninguna de las anteriores)
+
+Mensaje: "${message}"
+
+Responde con un JSON en el siguiente formato:
+{
+  "category": "nombre_de_la_categoria",
+  "confidence": 0.0-1.0
+}
+`;
+
+    // Llamar a la API
+    const apiMessages: ChatCompletionMessageParam[] = [
+      {
+        role: "system",
+        content: prompt
+      }
+    ];
+
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: apiMessages,
+      response_format: { type: 'json_object' },
+      max_tokens: 150,
+      temperature: 0.1
+    });
+
+    const result = JSON.parse(response.choices[0]?.message?.content || '{}');
     
-    case 'ubicacion':
-      return "[INFO] Para obtener la ubicación exacta, puedes contactar a la Municipalidad de Tafí Viejo o acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo.";
+    // Determinar la categoría de la consulta
+    const queryType = result.category || 'general';
+    console.log(`[Luna] Categoría de consulta detectada: ${queryType} (confianza: ${result.confidence || 'N/A'})`);
     
-    case 'contacto':
-      return "[INFO] Para obtener los datos de contacto actualizados, te recomiendo contactar a la Municipalidad de Tafí Viejo o visitar el sitio web oficial: www.tafiviejo.gob.ar";
+    // Generar recomendación según el tipo de consulta
+    let recommendation: string;
     
-    case 'requisitos':
-      return "[INFO] Para conocer los requisitos exactos y actualizados, te recomiendo contactar directamente a la Municipalidad de Tafí Viejo o acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo.";
+    switch (queryType) {
+      case 'tramites':
+        recommendation = "[INFO] Para obtener información precisa sobre este trámite, te recomiendo contactar directamente a la Municipalidad de Tafí Viejo. También puedes visitar el sitio web oficial: www.tafiviejo.gob.ar";
+        break;
+      
+      case 'horarios':
+        recommendation = "[INFO] Para confirmar los horarios actualizados, te recomiendo contactar a la Municipalidad de Tafí Viejo o acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo.";
+        break;
+      
+      case 'ubicacion':
+        recommendation = "[INFO] Para obtener la ubicación exacta, puedes contactar a la Municipalidad de Tafí Viejo o acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo.";
+        break;
+      
+      case 'contacto':
+        recommendation = "[INFO] Para obtener los datos de contacto actualizados, te recomiendo contactar a la Municipalidad de Tafí Viejo o visitar el sitio web oficial: www.tafiviejo.gob.ar";
+        break;
+      
+      case 'requisitos':
+        recommendation = "[INFO] Para conocer los requisitos exactos y actualizados, te recomiendo contactar directamente a la Municipalidad de Tafí Viejo o acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo.";
+        break;
+      
+      default:
+        recommendation = "[INFO] Te recomiendo contactar directamente a la Municipalidad de Tafí Viejo, acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo, o visitar el sitio web oficial: www.tafiviejo.gob.ar para obtener información precisa sobre tu consulta.";
+    }
     
-    default:
-      return "[INFO] Te recomiendo contactar directamente a la Municipalidad de Tafí Viejo, acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo, o visitar el sitio web oficial: www.tafiviejo.gob.ar para obtener información precisa sobre tu consulta.";
+    // Guardar en caché para futuras consultas
+    intentClassificationCache.set(cacheKey, recommendation);
+    
+    return recommendation;
+  } catch (error) {
+    console.error('[Luna] Error al generar recomendación:', error);
+    // En caso de error, devolver una recomendación genérica
+    return "[INFO] Te recomiendo contactar directamente a la Municipalidad de Tafí Viejo, acercarte personalmente a Av. Sáenz Peña 234, Tafí Viejo, o visitar el sitio web oficial: www.tafiviejo.gob.ar para obtener información precisa sobre tu consulta.";
   }
 }
 
@@ -337,123 +430,13 @@ ${message}
   return await callOpenAI(prompt);
 }
 
-// Función para detectar múltiples reclamos en un mensaje
-function detectMultipleComplaints(message: string): boolean {
-  // Patrones que podrían indicar múltiples problemas
-  const multipleComplaintPatterns = [
-    // Enumeraciones
-    /\b(1|primero|primer)\b.*\b(2|segundo|también|tambien|además|ademas)\b/i,
-    // Conectores que indican adición
-    /\b(además|ademas|también|tambien)\b.*\b(problema|reclamo|queja|issue)\b/i,
-    // Múltiples ubicaciones
-    /\b(en la calle|en la esquina|en la avenida|en el barrio)\b.*\b(también|tambien|además|ademas|y)\b.*\b(en la calle|en la esquina|en la avenida|en el barrio)\b/i,
-    // Múltiples tipos de problemas
-    /\b(luz|alumbrado|poste|luminaria)\b.*\b(basura|residuos|escombros|agua|cloacas|pavimento)\b/i,
-    // Separadores explícitos
-    /\b(por un lado|por otro lado|por otra parte)\b/i,
-    // Múltiples problemas explícitos
-    /\b(varios problemas|diferentes problemas|distintos problemas|dos problemas|múltiples problemas|multiples problemas)\b/i
-  ];
-  
-  // Verificar si alguno de los patrones coincide con el mensaje
-  return multipleComplaintPatterns.some(pattern => pattern.test(message));
-}
-
-// Función para validar la completitud de una respuesta
-function validateResponseCompleteness(response: GPTResponse): boolean {
-  const message = response.message;
-  
-  // Patrones que sugieren respuestas incompletas
-  const incompletePatterns = [
-    /\.\.\.$/, // Termina con puntos suspensivos
-    /entre otros/i, // Usa "entre otros" en lugar de listar todo
-    /etc\.?$/i, // Usa "etc." al final
-    /para más información/i, // Promete más información pero no la da
-    /los requisitos son:/i, // Introduce requisitos pero no los lista todos
-    /los pasos son:/i, // Introduce pasos pero no los lista todos
-    /más detalles/i, // Sugiere que hay más detalles sin darlos
-  ];
-  
-  // Verificar si hay patrones de incompletitud
-  const hasIncompletePatterns = incompletePatterns.some(pattern => pattern.test(message));
-  if (hasIncompletePatterns) {
-    return false;
-  }
-  
-  // Verificar si el mensaje termina con una pregunta o indicación clara
-  const questionPatterns = [
-    /\?$/, // Termina con signo de interrogación
-    /qué (?:opinas|piensas|te parece)/i, // Pide opinión
-    /(?:puedes|podrías) (?:decirme|indicarme|proporcionarme)/i, // Solicita información
-    /(?:necesitas|quieres) (?:más información|ayuda|saber)/i, // Ofrece ayuda
-    /responde (?:confirmar|cancelar)/i, // Solicita confirmación específica
-    /(?:escribe|envía|usa) (?:\/[a-z]+)/i, // Sugiere usar un comando
-  ];
-  
-  // Verificar si el mensaje termina con alguna forma de pregunta o indicación
-  const lastSentences = message.split(/[.!?]\s+/).slice(-2).join(' '); // Últimas dos oraciones
-  const hasQuestion = questionPatterns.some(pattern => pattern.test(lastSentences));
-  
-  return hasQuestion;
-}
-
-// Función para generar texto
-export async function generateText(message: string, conversationState?: ConversationState, messageHistory?: ConversationMessage[]): Promise<GPTResponse> {
-  console.log('[Luna] Generando respuesta para:', message);
-  
-  // Inicializar estado si no existe
-  const state = conversationState || {
-    isComplaintInProgress: false,
-    complaintData: {
-      type: undefined,
-      description: "",
-      location: undefined,
-      citizenData: {
-        name: undefined,
-        documentId: undefined,
-        address: undefined
-      }
-    },
-    currentStep: 'INIT',
-    mode: ConversationMode.DEFAULT
-  };
-  
-  // Inicializar historial si no existe
-  const history = messageHistory || [];
-  
-  try {
-    // Si es un comando específico, procesarlo directamente
-    if (isSpecificCommand(message)) {
-      console.log('[Luna] Procesando comando específico:', message);
-      return await processDefaultMode(message, state, history);
-    }
-    
-    // Si es un mensaje vacío o muy corto, responder genéricamente
-    if (!message || message.trim().length < 2) {
-      return {
-        isComplaint: false,
-        message: "Por favor, escribe un mensaje más detallado para que pueda ayudarte mejor."
-      };
-    }
-    
-    // Determinar el modo de conversación usando IA
-    return await determineConversationMode(message, state, history);
-    
-  } catch (error) {
-    console.error('[Luna] Error general en generateText:', error);
-    return {
-      isComplaint: false,
-      message: "Lo siento, tuve un problema al procesar tu mensaje. ¿Podrías intentarlo de nuevo o expresarlo de otra manera?"
-    };
-  }
-}
-
 // Procesador para el modo de reclamos
 async function processComplaintMode(message: string, state: ConversationState, history: ConversationMessage[]): Promise<GPTResponse> {
   console.log('[Luna] Procesando mensaje en modo COMPLAINT');
   
   // Detectar si el mensaje parece una consulta informativa
-  if (isLikelyInformationQuery(message) && !state.awaitingConfirmation && !state.confirmationRequested) {
+  const isInfoQuery = await isLikelyInformationQuery(message);
+  if (isInfoQuery && !state.awaitingConfirmation && !state.confirmationRequested) {
     console.log('[Luna] Mensaje detectado como consulta informativa mientras estaba en modo COMPLAINT');
     
     // Guardar el modo anterior
@@ -524,7 +507,7 @@ async function processComplaintMode(message: string, state: ConversationState, h
       // Devolver una respuesta que solicite confirmación explícita
       return {
         isComplaint: true,
-        message: `Gracias por proporcionar tu dirección de residencia, ${state.complaintData.citizenData.name}. He registrado que vives en ${state.complaintData.citizenData.address}. Ahora tengo todos los datos necesarios para tu reclamo sobre ${state.complaintData.description} en ${state.complaintData.location}:\n\n${complaintSummary.trim()}\n\nPor favor, responde CONFIRMAR para guardar el reclamo o CANCELAR para descartarlo. Al confirmar, aceptas que tus datos personales sean compartidos con la municipalidad y almacenados en nuestra base de datos para la gestión de tu reclamo. ¿Deseas proceder?`,
+        message: `Gracias por proporcionar tu dirección de residencia, ${state.complaintData.citizenData.name}. He registrado que vives en ${state.complaintData.citizenData.address}. Ahora tengo todos los datos necesarios para tu reclamo sobre ${state.complaintData.description} en ${state.complaintData.location}:\n\n${complaintSummary.trim()}\n\nPor favor, responde CONFIRMAR para guardar el reclamo o CANCELAR para descartarlo. Al confirmar, aceptas que tus datos personales sean compartidos con la municipalidad y almacenados en nuestra base de datos para la gestión de tu reclamo.`,
         data: state.complaintData
       };
     }
@@ -557,7 +540,7 @@ async function processComplaintMode(message: string, state: ConversationState, h
     };
   }
   
-  // Para otros casos, usar el flujo estándar
+  // Para otros casos, usar el flujo normal
   return await generateStandardResponse(message, state, history);
 }
 
@@ -613,143 +596,22 @@ async function processInfoMode(message: string, state: ConversationState, histor
 async function processDefaultMode(message: string, state: ConversationState, history: ConversationMessage[]): Promise<GPTResponse> {
   console.log('[Luna] Procesando mensaje en modo DEFAULT');
   
-  // Detectar múltiples reclamos
-  const hasMultipleComplaints = detectMultipleComplaints(message);
+  // Usar IA para clasificar la intención del mensaje
+  console.log('[Luna] Mensaje ambiguo, utilizando IA para clasificar intención');
+  const classification = await classifyMessageIntent(message);
   
-  // Si se detectan múltiples reclamos y no hay uno en progreso, informar al usuario
-  if (hasMultipleComplaints && !state.isComplaintInProgress) {
-    console.log('[Luna] Múltiples reclamos detectados, solicitando al usuario que los procese uno por uno');
+  // Si es un reclamo con confianza suficiente
+  if (classification.isComplaint && classification.confidence >= 0.6) {
+    console.log('[Luna] IA clasificó el mensaje como reclamo (confianza: ' + classification.confidence + ')');
     
-    return {
-      isComplaint: true,
-      message: "He detectado que mencionas varios problemas diferentes. Para poder ayudarte mejor, necesito que procesemos un reclamo a la vez. Por favor, indícame cuál de los problemas mencionados te gustaría registrar primero. ¿Cuál es el problema principal que deseas reportar en este momento?",
-      data: {
-        type: "MULTIPLE"
-      }
-    };
-  }
-  
-  // Detectar si el mensaje parece un reclamo
-  const complaintKeywords = [
-    'reclamo', 'queja', 'problema', 'falla', 'arreglar', 'roto', 'dañado', 
-    'no funciona', 'mal estado', 'denunciar', 'reportar', 'basurero', 'basural',
-    'acumulación', 'acumulacion', 'montón', 'monton', 'tiradero', 'tirar', 'tiran',
-    'abandonado', 'abandonan', 'desechos', 'residuos', 'escombros', 'suciedad',
-    'sucio', 'inundación', 'inundacion', 'agua', 'pozo', 'bache', 'rotura',
-    'rotura de caño', 'caño roto', 'vereda rota', 'calle rota', 'luz quemada',
-    'falta de luz', 'alumbrado', 'luminaria', 'semáforo', 'semaforo', 'tránsito',
-    'transito', 'accidente', 'peligro', 'peligroso', 'inseguro', 'inseguridad',
-    'vandalismo', 'robo', 'hurto', 'delincuencia', 'ruido', 'ruidos', 'molestia',
-    'molesto', 'olor', 'olores', 'peste', 'contaminación', 'contaminacion',
-    'animales', 'perros', 'gatos', 'ratas', 'plagas', 'insectos', 'mosquitos',
-    'fumigación', 'fumigacion', 'maleza', 'pasto', 'pasto alto', 'yuyos', 'baldío',
-    'baldio', 'terreno', 'vecino', 'vecinos', 'molestan', 'molesta', 'árbol', 'arbol',
-    'caerse', 'caído', 'caido', 'rama', 'tronco'
-  ];
-  
-  // Patrones específicos que indican reclamos (expresiones regulares)
-  const complaintPatterns = [
-    /\b(hay|existe|se (está|esta) formando|se (formó|formo)|tienen|tiran|dejan|abandonan)\b.{0,30}\b(basur[ao]|residuos|desechos|escombros|agua|inundaci[óo]n)\b/i,
-    /\b(est[áa] (rot[ao]|da[ñn]ad[ao]|abandon[ao]d[ao]|suci[ao]|inundad[ao]))\b/i,
-    /\b(no (funciona|anda|sirve|hay))\b.{0,20}\b(luz|agua|gas|servicio|recolecci[óo]n|alumbrado|sem[áa]foro)\b/i,
-    /\b(afuera|frente|cerca|al lado)\b.{0,30}\b(de (mi|la|nuestra) casa|del edificio|del barrio)\b/i,
-    /\b(vivo en|mi direcci[óo]n es|mi casa est[áa] en|en la calle)\b/i,
-    /\b(hace (días|dias|semanas|meses))\b.{0,30}\b(que (está|esta|hay|tienen|no pasan|no vienen))\b/i,
-    /\b(no pueden|no podemos|imposible)\b.{0,30}\b(jugar|caminar|transitar|pasar|usar)\b/i,
-    /\b([áa]rbol|poste|rama|tronco)\b.{0,30}\b(ca(ído|ido|erse|yendo)|peligro|roto)\b/i,
-    /\b(reportar|avisar|informar)\b.{0,30}\b(que hay|sobre|acerca)\b/i
-  ];
-  
-  const lowerMessage = message.toLowerCase();
-  
-  // Verificar palabras clave
-  const hasComplaintKeyword = complaintKeywords.some(keyword => lowerMessage.includes(keyword));
-  
-  // Verificar patrones específicos
-  const matchesComplaintPattern = complaintPatterns.some(pattern => pattern.test(message));
-  
-  // Detección basada en patrones (primera fase - rápida)
-  const isLikelyComplaintByPatterns = hasComplaintKeyword || matchesComplaintPattern;
-  
-  // Verificar si hay un mensaje mixto (consulta informativa + reclamo)
-  const informationKeywords = ['información', 'informacion', 'consulta', 'trámite', 'tramite', 'requisito', 'horario', 'dónde', 'donde', 'cómo', 'como'];
-  const hasInformationKeywords = informationKeywords.some(keyword => lowerMessage.includes(keyword));
-  
-  // Patrones que indican una transición a un nuevo tema o reclamo
-  const transitionPatterns = [
-    /\b(tambi[ée]n|adem[áa]s|por cierto|de paso|otra cosa)\b/i,
-    /\b(y|,)\s+(hay|existe|est[áa])\b/i
-  ];
-  
-  const hasTransitionPattern = transitionPatterns.some(pattern => pattern.test(message));
-  
-  // Detectar mensaje mixto (información + reclamo)
-  const isMixedMessage = hasInformationKeywords && (hasComplaintKeyword || matchesComplaintPattern) && hasTransitionPattern;
-  
-  // Si es un mensaje mixto, extraer la parte de reclamo
-  let complaintPart = message;
-  if (isMixedMessage) {
-    console.log('[Luna] Mensaje mixto detectado, extrayendo parte de reclamo');
-    
-    // Buscar el punto donde comienza la transición
-    const transitionIndices: number[] = [];
-    transitionPatterns.forEach(pattern => {
-      const match = pattern.exec(message);
-      if (match) {
-        transitionIndices.push(match.index);
-      }
-    });
-    
-    // Si encontramos puntos de transición, usar el primero
-    if (transitionIndices.length > 0) {
-      const transitionIndex = Math.min(...transitionIndices);
-      complaintPart = message.substring(transitionIndex);
-      console.log(`[Luna] Parte de reclamo extraída: "${complaintPart}"`);
-    }
-  }
-  
-  // Si hay un reclamo en progreso y el usuario parece estar haciendo una consulta informativa
-  // sin indicar que quiere cambiar de tema, mantener el contexto del reclamo
-  const isInformationQuery = isLikelyInformationQuery(message);
-  const isExplicitModeChange = message.toLowerCase().includes('cancelar') || 
-                              message.toLowerCase().includes('olvidar') || 
-                              message.toLowerCase().includes('cambiar de tema');
-  
-  // Si el usuario quiere explícitamente cambiar de modo, reseteamos el estado del reclamo
-  if (state.isComplaintInProgress && isExplicitModeChange) {
-    console.log('[Luna] Usuario solicitó cambio explícito de modo, reseteando estado de reclamo');
-    state.isComplaintInProgress = false;
-    state.complaintData = {
-      type: undefined,
-      description: "",
-      location: undefined,
-      citizenData: {
-        name: undefined,
-        documentId: undefined,
-        address: undefined
-      }
-    };
-    state.mode = ConversationMode.DEFAULT;
-    
-    return {
-      isComplaint: false,
-      message: "He cancelado el reclamo en progreso. ¿En qué más puedo ayudarte?"
-    };
-  }
-  
-  // Si es claramente un reclamo por patrones o un mensaje mixto con parte de reclamo,
-  // procesarlo como reclamo (incluso si hay uno en progreso, lo reemplazamos)
-  if ((isLikelyComplaintByPatterns || isMixedMessage) && 
-      (!state.isComplaintInProgress || hasTransitionPattern)) {
-    
-    console.log('[Luna] Mensaje detectado como reclamo por patrones, cambiando a modo COMPLAINT');
+    // Cambiar al modo COMPLAINT
     state.mode = ConversationMode.COMPLAINT;
     state.isComplaintInProgress = true;
     
-    // Inicializar datos del reclamo con la parte relevante del mensaje
+    // Inicializar datos del reclamo
     state.complaintData = {
       type: undefined,
-      description: isMixedMessage ? complaintPart : message,
+      description: message,
       location: undefined,
       citizenData: {
         name: undefined,
@@ -758,50 +620,33 @@ async function processDefaultMode(message: string, state: ConversationState, his
       }
     };
     
-    return await processComplaintMode(isMixedMessage ? complaintPart : message, state, history);
+    return await processComplaintMode(message, state, history);
+  } 
+  // Si es una consulta informativa
+  else if (classification.isInformationQuery && classification.confidence >= 0.6) {
+    console.log('[Luna] IA clasificó el mensaje como consulta informativa (confianza: ' + classification.confidence + ')');
+    
+    // Si hay un reclamo en progreso, guardamos el modo anterior
+    if (state.isComplaintInProgress) {
+      state.previousMode = state.mode;
+      console.log('[Luna] Guardando modo anterior:', state.previousMode);
+    }
+    
+    state.mode = ConversationMode.INFO;
+    return await processInfoMode(message, state, history);
   }
   
-  // Si no es claramente un reclamo por patrones, pero tampoco parece claramente una consulta informativa,
-  // usar IA para clasificar (segunda fase - más precisa pero más lenta)
-  if (!isLikelyComplaintByPatterns && !isInformationQuery && !state.isComplaintInProgress) {
-    console.log('[Luna] Mensaje ambiguo, utilizando IA para clasificar intención');
-    
-    // Clasificar intención con IA
-    const classification = await classifyMessageIntent(message);
-    
-    // Si la IA clasifica como reclamo con confianza suficiente
-    if (classification.isComplaint && classification.confidence >= 0.7) {
-      console.log('[Luna] IA clasificó el mensaje como reclamo (confianza: ' + classification.confidence + '), cambiando a modo COMPLAINT');
-      state.mode = ConversationMode.COMPLAINT;
-      state.isComplaintInProgress = true;
-      
-      // Inicializar datos del reclamo
-      state.complaintData = {
-        type: undefined,
-        description: message,
-        location: undefined,
-        citizenData: {
-          name: undefined,
-          documentId: undefined,
-          address: undefined
-        }
-      };
-      
-      return await processComplaintMode(message, state, history);
-    }
-  }
+  // Para mensajes generales, usar RAG solo si es necesario según la clasificación
+  const useRAG = classification.isInformationQuery;
   
-  // Si llegamos aquí, el mensaje no se considera un reclamo o ya hay uno en progreso
-  // Para mensajes en modo DEFAULT, verificamos si debemos usar RAG según los criterios
-  try {
-    if (shouldUseRAG(message, state)) {
-      return await generateResponseWithRAG(message, state, history);
-    } else {
-      // Si no es apropiado usar RAG, usamos el flujo estándar
-      return await generateStandardResponse(message, state, history);
-    }
-  } catch (error) {
-    console.error('[DEFAULT] Error al generar respuesta con RAG:', error);
+  if (useRAG) {
+    console.log('[Luna] Usando RAG para posible consulta informativa');
+    return await generateResponseWithRAG(message, state, history);
+  } else {
+    console.log('[Luna] No usando RAG para mensaje general');
+    console.log('[Luna] Generando respuesta estándar');
+    
+    // Generar respuesta usando el modelo de lenguaje
     return await generateStandardResponse(message, state, history);
   }
 }
@@ -811,8 +656,20 @@ async function classifyMessageIntent(message: string): Promise<{isComplaint: boo
   try {
     console.log('[Luna] Clasificando intención del mensaje usando IA');
     
+    // Verificar si el mensaje ya está en caché
+    const normalizedMessage = message.toLowerCase().trim();
+    if (intentClassificationCache.has(normalizedMessage)) {
+      const cachedResult = intentClassificationCache.get(normalizedMessage);
+      console.log('[Luna] Usando resultado en caché para mensaje similar');
+      // Asegurarse de que el resultado no sea undefined
+      if (cachedResult) {
+        return cachedResult as {isComplaint: boolean, confidence: number, isInformationQuery: boolean};
+      }
+    }
+    
+    // Para todos los mensajes, usar la API de OpenAI
     const prompt = `
-Eres un asistente especializado en clasificar mensajes para un chatbot municipal. Tu tarea es determinar si el siguiente mensaje del usuario tiene la intención de hacer un reclamo o reportar un problema que requiere intervención municipal.
+Eres un asistente especializado en clasificar mensajes para un chatbot municipal. Tu tarea es determinar si el siguiente mensaje del usuario tiene la intención de hacer un reclamo, una consulta informativa, o es un saludo/mensaje general.
 
 ### Ejemplos de mensajes que SÍ son reclamos:
 - "La calle de mi barrio está llena de baches"
@@ -821,13 +678,18 @@ Eres un asistente especializado en clasificar mensajes para un chatbot municipal
 - "Los vecinos tiran basura en el terreno baldío de la esquina"
 - "El semáforo de la esquina de San Martín y Belgrano no funciona"
 - "Afuera de mi casa se está formando un basurero, vivo en Sargento Cabral altura 400"
+- "Me robaron la moto frente a mi casa"
+- "Hay un perro abandonado en la plaza"
+- "No hay luz en toda la cuadra desde ayer"
 
-### Ejemplos de mensajes que NO son reclamos (son consultas informativas):
+### Ejemplos de mensajes que son CONSULTAS INFORMATIVAS:
 - "¿Dónde puedo pagar mis impuestos municipales?"
 - "¿Cuál es el horario de atención de la municipalidad?"
 - "¿Qué documentos necesito para renovar mi licencia de conducir?"
 - "¿Cuándo es el próximo evento cultural en la plaza?"
 - "¿Cómo separo correctamente los residuos?"
+- "¿Cuánto cuesta la licencia de conducir?"
+- "¿Qué trámites puedo hacer online?"
 
 ### Ejemplos de mensajes GENERALES (ni reclamos ni consultas específicas):
 - "Hola"
@@ -851,6 +713,8 @@ Clasifica este mensaje y responde en formato JSON con la siguiente estructura:
 Nota: Un mensaje puede ser clasificado como reclamo o como consulta informativa, pero no ambos a la vez.
 `;
 
+    console.log('[Luna] Enviando solicitud a OpenAI...');
+    
     // Llamar a la API
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -860,15 +724,46 @@ Nota: Un mensaje puede ser clasificado como reclamo o como consulta informativa,
       temperature: 0.1
     });
 
-    // Parsear la respuesta
-    const result = JSON.parse(response.choices[0]?.message?.content || '{"isComplaint": false, "isInformationQuery": false, "confidence": 0}');
-    console.log(`[Luna] Clasificación IA: ${result.isComplaint ? 'RECLAMO' : result.isInformationQuery ? 'CONSULTA' : 'GENERAL'} (Confianza: ${result.confidence})`);
+    console.log('[Luna] Respuesta recibida de OpenAI');
     
-    return {
-      isComplaint: result.isComplaint,
-      confidence: result.confidence,
-      isInformationQuery: result.isInformationQuery
-    };
+    // Parsear la respuesta
+    const content = response.choices[0]?.message?.content;
+    console.log('[Luna] Contenido de la respuesta:', content);
+    
+    if (!content) {
+      console.error('[Luna] Respuesta vacía de OpenAI');
+      return {
+        isComplaint: false,
+        confidence: 0,
+        isInformationQuery: false
+      };
+    }
+    
+    try {
+      const result = JSON.parse(content);
+      console.log(`[Luna] Clasificación IA: ${result.isComplaint ? 'RECLAMO' : result.isInformationQuery ? 'CONSULTA' : 'GENERAL'} (Confianza: ${result.confidence})`);
+      
+      // Guardar el resultado en caché
+      intentClassificationCache.set(normalizedMessage, {
+        isComplaint: result.isComplaint,
+        confidence: result.confidence,
+        isInformationQuery: result.isInformationQuery
+      });
+      
+      return {
+        isComplaint: result.isComplaint,
+        confidence: result.confidence,
+        isInformationQuery: result.isInformationQuery
+      };
+    } catch (parseError) {
+      console.error('[Luna] Error al parsear la respuesta JSON:', parseError);
+      console.error('[Luna] Contenido que causó el error:', content);
+      return {
+        isComplaint: false,
+        confidence: 0,
+        isInformationQuery: false
+      };
+    }
   } catch (error) {
     console.error('[Luna] Error al clasificar intención con IA:', error);
     // En caso de error, asumir valores por defecto
@@ -878,62 +773,6 @@ Nota: Un mensaje puede ser clasificado como reclamo o como consulta informativa,
       isInformationQuery: false
     };
   }
-}
-
-// Función para verificar si es un comando específico
-function isSpecificCommand(message: string): boolean {
-  // Palabras clave que indican comandos específicos que no deberían usar RAG
-  const commandKeywords = [
-    'cancelar', 'cancel',
-    'ayuda', 'help',
-    'estado', 'status',
-    'reiniciar', 'restart',
-    'confirmar', 'confirm',
-    'misreclamos', 'myrequests',
-    'reclamo', 'request'
-  ];
-  
-  // Si el mensaje contiene palabras clave de comandos, es un comando específico
-  const lowercaseMessage = message.toLowerCase();
-  const isCommand = commandKeywords.some(keyword => lowercaseMessage.includes(keyword));
-  
-  if (isCommand) {
-    console.log('[Luna] Detectado comando específico:', message);
-  }
-  
-  return isCommand;
-}
-
-// Función para determinar si se debe usar RAG para un mensaje
-function shouldUseRAG(message: string, state: ConversationState): boolean {
-  // 1. Priorizar el modo INFO - Usar RAG si estamos en modo INFO (este modo está específicamente diseñado para consultas informativas)
-  if (state.mode === ConversationMode.INFO) {
-    console.log('[Luna] Usando RAG porque estamos en modo INFO');
-    return true;
-  }
-  
-  // 2. No usar RAG si hay un reclamo en progreso en modo COMPLAINT
-  if (state.isComplaintInProgress && state.mode === ConversationMode.COMPLAINT) {
-    console.log('[Luna] No usando RAG porque hay un reclamo en progreso en modo COMPLAINT');
-    return false;
-  }
-  
-  // 3. No usar RAG para saludos simples y mensajes muy cortos no informativos
-  const lowercaseMessage = message.toLowerCase().trim();
-  const simpleGreetings = [
-    'hola', 'buenos días', 'buenas tardes', 'buenas noches', 
-    'hi', 'hello', 'hey', 'saludos', 'buen día', 'qué tal'
-  ];
-  
-  if (simpleGreetings.some(greeting => lowercaseMessage === greeting)) {
-    console.log('[Luna] No usando RAG para un saludo simple');
-    return false;
-  }
-  
-  // 4. Para todos los demás casos, permitir que GPT-4o-mini determine si necesita información adicional
-  // Esto proporciona flexibilidad mientras evita usar RAG en casos obvios donde no es necesario
-  console.log('[Luna] Permitiendo que el modelo determine si necesita información adicional');
-  return true;
 }
 
 // Función para obtener el prompt del sistema basado en el estado actual
@@ -1065,7 +904,7 @@ Si el usuario menciona un problema o reclamo, debes recolectar la siguiente info
 # EJEMPLOS DE RESPUESTAS CORRECTAS
 
 ## Ejemplo 1: Inicio de conversación
-Usuario: "Hola, ¿cómo estás?"
+Usuario: "Hola"
 Asistente: 
 message: "¡Hola! 👋 Soy Nina, la asistente virtual de la Municipalidad de Tafí Viejo. Estoy aquí para ayudarte a registrar reclamos o resolver tus dudas sobre servicios municipales. ¿En qué puedo ayudarte hoy?"
 
@@ -1153,6 +992,222 @@ Debes responder en formato JSON con la siguiente estructura:
 // Exportar la función por defecto para compatibilidad con código existente
 export default generateText;
 
+// Función para determinar el modo de conversación
+async function determineConversationMode(message: string, state: ConversationState, history: ConversationMessage[]): Promise<GPTResponse> {
+  console.log('[Luna] Determinando modo de conversación para:', message);
+  
+  // Si hay un reclamo en progreso y el usuario quiere explícitamente cambiar de tema, reseteamos
+  const isExplicitModeChange = message.toLowerCase().includes('cancelar') || 
+                              message.toLowerCase().includes('olvidar') || 
+                              message.toLowerCase().includes('cambiar de tema');
+  
+  if (state.isComplaintInProgress && isExplicitModeChange) {
+    console.log('[Luna] Usuario solicitó cambio explícito de modo, reseteando estado de reclamo');
+    state.isComplaintInProgress = false;
+    state.complaintData = {
+      type: undefined,
+      description: "",
+      location: undefined,
+      citizenData: {
+        name: undefined,
+        documentId: undefined,
+        address: undefined
+      }
+    };
+    state.mode = ConversationMode.DEFAULT;
+    
+    return {
+      isComplaint: false,
+      message: "He cancelado el reclamo en progreso. ¿En qué más puedo ayudarte?"
+    };
+  }
+  
+  // Optimización: Si ya estamos en un modo específico y hay un reclamo en progreso, 
+  // continuar en ese modo sin reclasificar
+  if (state.isComplaintInProgress && state.mode === ConversationMode.COMPLAINT) {
+    console.log('[Luna] Continuando con el reclamo en progreso sin reclasificar');
+    return await processComplaintMode(message, state, history);
+  }
+  
+  // Verificar si es un comando específico
+  if (await isSpecificCommand(message)) {
+    console.log('[Luna] Procesando comando específico:', message);
+    return await processDefaultMode(message, state, history);
+  }
+  
+  // Usar IA para clasificar la intención del mensaje
+  const classification = await classifyMessageIntent(message);
+  
+  // Si es un reclamo con confianza suficiente
+  if (classification.isComplaint && classification.confidence >= 0.6) {
+    console.log('[Luna] IA clasificó el mensaje como reclamo (confianza: ' + classification.confidence + ')');
+    
+    // Cambiar al modo COMPLAINT
+    state.mode = ConversationMode.COMPLAINT;
+    state.isComplaintInProgress = true;
+    
+    // Inicializar datos del reclamo
+    state.complaintData = {
+      type: undefined,
+      description: message,
+      location: undefined,
+      citizenData: {
+        name: undefined,
+        documentId: undefined,
+        address: undefined
+      }
+    };
+    
+    return await processComplaintMode(message, state, history);
+  } 
+  // Si es una consulta informativa
+  else if (classification.isInformationQuery && classification.confidence >= 0.6) {
+    console.log('[Luna] IA clasificó el mensaje como consulta informativa (confianza: ' + classification.confidence + ')');
+    
+    // Si hay un reclamo en progreso, guardamos el modo anterior
+    if (state.isComplaintInProgress) {
+      state.previousMode = state.mode;
+      console.log('[Luna] Guardando modo anterior:', state.previousMode);
+    }
+    
+    state.mode = ConversationMode.INFO;
+    return await processInfoMode(message, state, history);
+  }
+  
+  // Si es un mensaje general o la confianza es baja
+  else {
+    // Si hay un reclamo en progreso, continuamos con ese flujo
+    if (state.isComplaintInProgress) {
+      console.log('[Luna] Continuando con el reclamo en progreso');
+      return await processComplaintMode(message, state, history);
+    }
+    
+    // De lo contrario, procesamos en modo default
+    console.log('[Luna] Procesando mensaje en modo DEFAULT');
+    state.mode = ConversationMode.DEFAULT;
+    
+    // Para mensajes generales, usar RAG solo si es necesario según la clasificación
+    if (classification.isInformationQuery) {
+      console.log('[Luna] Usando RAG para posible consulta informativa');
+      return await generateResponseWithRAG(message, state, history);
+    } else {
+      console.log('[Luna] No usando RAG para mensaje general');
+      console.log('[Luna] Generando respuesta estándar');
+      
+      // Generar respuesta usando el modelo de lenguaje
+      return await generateStandardResponse(message, state, history);
+    }
+  }
+}
+
+// Función para determinar si es un comando específico
+async function isSpecificCommand(message: string): Promise<boolean> {
+  console.log('[Luna] Verificando si el mensaje es un comando específico');
+  
+  try {
+    // Verificar si hay una entrada en caché para este mensaje
+    const cacheKey = `cmd_${message.toLowerCase().trim()}`;
+    if (intentClassificationCache.has(cacheKey)) {
+      console.log('[Luna] Usando resultado en caché para clasificación de comando');
+      const cachedResult = intentClassificationCache.get(cacheKey);
+      return cachedResult && typeof cachedResult === 'object' && cachedResult.isCommand === true;
+    }
+    
+    // Usar la API de OpenAI para clasificar si el mensaje es un comando específico
+    const prompt = `
+Analiza el siguiente mensaje y determina si es un comando específico para un chatbot municipal.
+Los comandos específicos incluyen: cancelar, ayuda, estado, reiniciar, confirmar, misreclamos, o reclamo.
+
+Mensaje: "${message}"
+
+Responde con un JSON en el siguiente formato:
+{
+  "isCommand": true/false,
+  "commandType": "nombre_del_comando" (o null si no es un comando),
+  "confidence": 0.0-1.0
+}
+`;
+
+    // Llamar a la API
+    const apiMessages: ChatCompletionMessageParam[] = [
+      {
+        role: "system",
+        content: prompt
+      }
+    ];
+
+    try {
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: apiMessages,
+        response_format: { type: 'json_object' },
+        max_tokens: 150,
+        temperature: 0.1
+      });
+
+      const result = JSON.parse(response.choices[0]?.message?.content || '{}');
+      
+      // Guardar en caché para futuras consultas
+      intentClassificationCache.set(cacheKey, result);
+      
+      if (result.isCommand) {
+        console.log(`[Luna] Detectado comando específico: ${result.commandType} (confianza: ${result.confidence})`);
+      }
+      
+      return result.isCommand === true;
+    } catch (error) {
+      console.error('[Luna] Error al clasificar comando:', error);
+      // En caso de error, devolver false para evitar clasificaciones incorrectas
+      return false;
+    }
+  } catch (error) {
+    console.error('[Luna] Error general en isSpecificCommand:', error);
+    return false;
+  }
+}
+
+// Función para determinar si se debe usar RAG para un mensaje
+function shouldUseRAG(message: string, state: ConversationState): boolean {
+  // 1. Priorizar el modo INFO - Usar RAG si estamos en modo INFO (este modo está específicamente diseñado para consultas informativas)
+  if (state.mode === ConversationMode.INFO) {
+    console.log('[Luna] Usando RAG porque estamos en modo INFO');
+    return true;
+  }
+  
+  // 2. No usar RAG si hay un reclamo en progreso en modo COMPLAINT
+  if (state.isComplaintInProgress && state.mode === ConversationMode.COMPLAINT) {
+    console.log('[Luna] No usando RAG porque hay un reclamo en progreso en modo COMPLAINT');
+    return false;
+  }
+  
+  // 3. Para todos los demás casos, usar clasificación por IA para determinar si es una consulta informativa
+  console.log('[Luna] Permitiendo que el modelo determine si necesita información adicional');
+  return true;
+}
+
+// Función para determinar si un mensaje es probablemente un reclamo
+// Esta función ahora es un wrapper que llama a la clasificación por IA
+async function isLikelyComplaintByAI(message: string): Promise<{isComplaint: boolean, confidence: number, isInformationQuery: boolean}> {
+  // Clasificar el mensaje con IA
+  return await classifyMessageIntent(message);
+}
+
+// Función para determinar si un mensaje es una consulta informativa
+// Esta función ahora utiliza la clasificación por IA en lugar de patrones
+async function isLikelyInformationQuery(message: string): Promise<boolean> {
+  console.log('[Luna] Verificando si el mensaje es una consulta informativa usando IA');
+  
+  try {
+    // Usar la clasificación por IA para determinar si es una consulta informativa
+    const classification = await classifyMessageIntent(message);
+    return classification.isInformationQuery;
+  } catch (error) {
+    console.error('[Luna] Error al clasificar mensaje como consulta informativa:', error);
+    // En caso de error, devolver false para evitar cambiar el flujo incorrectamente
+    return false;
+  }
+}
+
 // Función para verificar si un reclamo está listo para guardar
 export function isReadyToSave(complaintData: any): boolean {
   console.log('Verificando si el reclamo está listo para guardar:', JSON.stringify(complaintData, null, 2));
@@ -1188,42 +1243,14 @@ export function isReadyToSave(complaintData: any): boolean {
   return isReady;
 }
 
-// Función para determinar si un mensaje es probablemente un reclamo
-// Esta función ahora es un wrapper que llama a la clasificación por IA
-async function isLikelyComplaintByAI(message: string): Promise<{isComplaint: boolean, confidence: number, isInformationQuery: boolean}> {
-  // Clasificar el mensaje con IA
-  return await classifyMessageIntent(message);
-}
-
-// Función para determinar si un mensaje es una consulta informativa
-// Esta función ahora solo se usa como compatibilidad con el código existente
-// La lógica real se maneja en classifyMessageIntent
-function isLikelyInformationQuery(message: string): boolean {
-  // Esta función ahora solo se usa como compatibilidad con el código existente
-  // La lógica real se maneja en classifyMessageIntent
-  const informationQueryPatterns = [
-    /\b(qué|quién|dónde|cuándo|por qué|cómo)\b/i,
-    /\b(información|detalles|datos|sobre)\b/i,
-    /\b(horario|dirección|teléfono|correo)\b/i,
-    /\b(ayuda|soporte|asistencia)\b/i
-  ];
+// Función para generar texto
+export async function generateText(message: string, conversationState?: ConversationState, messageHistory?: ConversationMessage[]): Promise<GPTResponse> {
+  console.log('[Luna] Generando respuesta para:', message);
   
-  return informationQueryPatterns.some(pattern => pattern.test(message));
-}
-
-// Función para procesar el mensaje del usuario y determinar el modo de conversación
-async function determineConversationMode(message: string, state: ConversationState, history: ConversationMessage[]): Promise<GPTResponse> {
-  console.log('[Luna] Determinando modo de conversación para:', message);
-  
-  // Si hay un reclamo en progreso y el usuario quiere explícitamente cambiar de tema, reseteamos
-  const isExplicitModeChange = message.toLowerCase().includes('cancelar') || 
-                              message.toLowerCase().includes('olvidar') || 
-                              message.toLowerCase().includes('cambiar de tema');
-  
-  if (state.isComplaintInProgress && isExplicitModeChange) {
-    console.log('[Luna] Usuario solicitó cambio explícito de modo, reseteando estado de reclamo');
-    state.isComplaintInProgress = false;
-    state.complaintData = {
+  // Inicializar estado si no existe
+  const state = conversationState || {
+    isComplaintInProgress: false,
+    complaintData: {
       type: undefined,
       description: "",
       location: undefined,
@@ -1232,62 +1259,37 @@ async function determineConversationMode(message: string, state: ConversationSta
         documentId: undefined,
         address: undefined
       }
-    };
-    state.mode = ConversationMode.DEFAULT;
+    },
+    currentStep: 'INIT',
+    mode: ConversationMode.DEFAULT
+  };
+  
+  // Inicializar historial si no existe
+  const history = messageHistory || [];
+  
+  try {
+    // Si es un comando específico, procesarlo directamente
+    if (await isSpecificCommand(message)) {
+      console.log('[Luna] Procesando comando específico:', message);
+      return await processDefaultMode(message, state, history);
+    }
     
+    // Si es un mensaje vacío o muy corto, responder genéricamente
+    if (!message || message.trim().length < 2) {
+      return {
+        isComplaint: false,
+        message: "Por favor, escribe un mensaje más detallado para que pueda ayudarte mejor."
+      };
+    }
+    
+    // Determinar el modo de conversación usando IA
+    return await determineConversationMode(message, state, history);
+    
+  } catch (error) {
+    console.error('[Luna] Error general en generateText:', error);
     return {
       isComplaint: false,
-      message: "He cancelado el reclamo en progreso. ¿En qué más puedo ayudarte?"
+      message: "Lo siento, tuve un problema al procesar tu mensaje. ¿Podrías intentarlo de nuevo o expresarlo de otra manera?"
     };
-  }
-  
-  // Usar IA para clasificar la intención del mensaje
-  const classification = await classifyMessageIntent(message);
-  
-  // Si es un reclamo con confianza suficiente
-  if (classification.isComplaint && classification.confidence >= 0.6) {
-    console.log('[Luna] IA clasificó el mensaje como reclamo (confianza: ' + classification.confidence + '), cambiando a modo COMPLAINT');
-    state.mode = ConversationMode.COMPLAINT;
-    state.isComplaintInProgress = true;
-    
-    // Inicializar datos del reclamo
-    state.complaintData = {
-      type: undefined,
-      description: message,
-      location: undefined,
-      citizenData: {
-        name: undefined,
-        documentId: undefined,
-        address: undefined
-      }
-    };
-    
-    return await processComplaintMode(message, state, history);
-  } 
-  // Si es una consulta informativa
-  else if (classification.isInformationQuery && classification.confidence >= 0.6) {
-    console.log('[Luna] IA clasificó el mensaje como consulta informativa (confianza: ' + classification.confidence + '), cambiando a modo INFO');
-    
-    // Si hay un reclamo en progreso, guardamos el modo anterior
-    if (state.isComplaintInProgress) {
-      state.previousMode = state.mode;
-      console.log('[Luna] Guardando modo anterior:', state.previousMode);
-    }
-    
-    state.mode = ConversationMode.INFO;
-    return await processInfoMode(message, state, history);
-  }
-  // Si es un mensaje general o la confianza es baja
-  else {
-    // Si hay un reclamo en progreso, continuamos con ese flujo
-    if (state.isComplaintInProgress) {
-      console.log('[Luna] Continuando con el reclamo en progreso');
-      return await processComplaintMode(message, state, history);
-    }
-    
-    // De lo contrario, procesamos en modo default
-    console.log('[Luna] Procesando mensaje en modo DEFAULT');
-    state.mode = ConversationMode.DEFAULT;
-    return await processDefaultMode(message, state, history);
   }
 }

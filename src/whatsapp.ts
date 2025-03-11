@@ -1,6 +1,18 @@
 import { Express, Request, Response } from 'express';
 import axios from 'axios';
-import { generateText } from './textGenerator';
+import { generateText, isReadyToSave } from './textGenerator';
+import { ConversationState, ConversationMode, ConversationMessage, GPTResponse, IntentType } from './types';
+import OpenAI from 'openai';
+import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
+
+// Inicializar OpenAI
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY || 'your-api-key',
+});
+
+// Caché simple para evitar llamadas repetidas a la API para mensajes idénticos
+const intentClassificationCache: Map<string, any> = new Map();
+
 import { findOrCreateCitizen, createComplaint } from './prisma';
 import { 
   getConversationState, 
@@ -12,7 +24,6 @@ import {
   redis
 } from './redis';
 import { handleCommand } from './commands';
-import { IntentType, ConversationMode } from './types';
 
 export async function sendWhatsAppMessage(to: string, message: string) {
   const token = process.env.WHATSAPP_TOKEN;
@@ -38,20 +49,6 @@ export async function sendWhatsAppMessage(to: string, message: string) {
   } catch (error) {
     console.error('Error al enviar mensaje de WhatsApp:', error);
   }
-}
-
-// Función para verificar si tenemos todos los datos necesarios para guardar el reclamo
-function isReadyToSave(complaintData: any): boolean {
-  console.log('Verificando si el reclamo está listo para guardar:', JSON.stringify(complaintData, null, 2));
-  
-  return (
-    complaintData.type &&
-    complaintData.description &&
-    complaintData.location &&
-    complaintData.citizenData?.name &&
-    complaintData.citizenData?.documentId &&
-    complaintData.citizenData?.address
-  );
 }
 
 export function setupWhatsAppWebhook(app: Express) {
@@ -140,7 +137,7 @@ export function setupWhatsAppWebhook(app: Express) {
       }
       
       // Detectar intenciones de cancelación en mensajes normales cuando hay un reclamo en progreso
-      if (conversationState.isComplaintInProgress && detectCancellationIntent(userText)) {
+      if (conversationState.isComplaintInProgress && await detectCancellationIntent(userText)) {
         console.log('Intención de cancelación detectada en mensaje normal');
         
         // Mensaje de cancelación
@@ -217,21 +214,63 @@ export async function webhook(req: Request, res: Response) {
   }
 }
 
-// Función para detectar intenciones de cancelación en mensajes normales
-function detectCancellationIntent(message: string): boolean {
-  const cancellationPatterns = [
-    /\b(cancelar|anular|detener|parar|suspender|abandonar)\s+(el|este|mi|todo|reclamo|queja|proceso|trámite)\b/i,
-    /\b(no|ya no)\s+(quiero|deseo|necesito)\s+(seguir|continuar|hacer|presentar|registrar)\s+(el|este|mi|un|reclamo|queja)\b/i,
-    /\b(olvidar|olvidemos|dejar|dejemos)\s+(el|este|mi|todo|reclamo|queja|proceso|trámite)\b/i,
-    /\b(mejor|prefiero)\s+(no|cancelar|anular|olvidar|dejar)\s+(el|este|mi|todo|reclamo|queja|proceso|trámite)\b/i,
-    /\b(quiero|deseo|necesito)\s+(cancelar|anular|detener|parar|suspender|abandonar)\s+(el|este|mi|todo|reclamo|queja|proceso|trámite)\b/i,
-    /\b(cancelar|anular|detener|parar|suspender|abandonar)\s+todo\b/i,
-    /\bdejalo\s+(así|asi)\b/i,
-    /\bno\s+importa\s+(ya|más|mas)\b/i,
-    /\bolvida(lo|r)\s+(todo|el reclamo|la queja|el proceso|el trámite)\b/i
-  ];
+// Función para detectar intención de cancelación usando IA
+async function detectCancellationIntent(message: string): Promise<boolean> {
+  console.log('[Luna] Verificando intención de cancelación usando IA para:', message);
   
-  return cancellationPatterns.some(pattern => pattern.test(message));
+  try {
+    // Verificar si hay una entrada en caché para este mensaje
+    const cacheKey = `cancel_${message.toLowerCase().trim()}`;
+    if (intentClassificationCache.has(cacheKey)) {
+      console.log('[Luna] Usando resultado en caché para intención de cancelación');
+      const cachedResult = intentClassificationCache.get(cacheKey);
+      return cachedResult === true;
+    }
+    
+    // Usar la API de OpenAI para clasificar si el mensaje expresa intención de cancelación
+    const prompt = `
+Analiza el siguiente mensaje y determina si expresa una intención clara de cancelar o abandonar un proceso de reclamo municipal en curso.
+Ejemplos de intenciones de cancelación incluyen: querer cancelar el reclamo, detener el proceso, no continuar con la queja, etc.
+
+Mensaje: "${message}"
+
+Responde con un JSON en el siguiente formato:
+{
+  "isCancellation": true/false,
+  "confidence": 0.0-1.0
+}
+`;
+
+    // Llamar a la API
+    const apiMessages: ChatCompletionMessageParam[] = [
+      {
+        role: "system",
+        content: prompt
+      }
+    ];
+
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: apiMessages,
+      response_format: { type: 'json_object' },
+      max_tokens: 150,
+      temperature: 0.1
+    });
+
+    const result = JSON.parse(response.choices[0]?.message?.content || '{}');
+    
+    // Guardar en caché para futuras consultas
+    intentClassificationCache.set(cacheKey, result.isCancellation === true);
+    
+    if (result.isCancellation) {
+      console.log(`[Luna] Detectada intención de cancelación (confianza: ${result.confidence})`);
+    }
+    
+    return result.isCancellation === true;
+  } catch (error) {
+    console.error('[Luna] Error al detectar intención de cancelación:', error);
+    return false;
+  }
 }
 
 async function processMessage(from: string, message: string, conversationState?: any, messageHistory?: any) {
@@ -357,7 +396,7 @@ async function processMessage(from: string, message: string, conversationState?:
         conversationState.previousIntent === IntentType.COMPLAINT &&
         conversationState.mode === ConversationMode.COMPLAINT) {
       // Verificar si el mensaje parece una consulta informativa
-      if (isLikelyInformationQuery(message)) {
+      if (await isLikelyInformationQuery(message)) {
         console.log('[Luna] Cambiando temporalmente a modo INFO desde COMPLAINT');
         conversationState.previousMode = conversationState.mode;
         conversationState.mode = ConversationMode.INFO;
@@ -564,13 +603,61 @@ async function saveComplaint(from: string, complaintData: any) {
   }
 }
 
-function isLikelyInformationQuery(message: string): boolean {
-  const informationQueryPatterns = [
-    /\b(qué|quién|dónde|cuándo|por qué|cómo)\b/i,
-    /\b(información|detalles|datos|sobre)\b/i,
-    /\b(horario|dirección|teléfono|correo)\b/i,
-    /\b(ayuda|soporte|asistencia)\b/i
-  ];
+// Función para determinar si un mensaje es probablemente una consulta informativa usando IA
+async function isLikelyInformationQuery(message: string): Promise<boolean> {
+  console.log('[Luna] Verificando si el mensaje es una consulta informativa usando IA');
   
-  return informationQueryPatterns.some(pattern => pattern.test(message));
+  try {
+    // Verificar si hay una entrada en caché para este mensaje
+    const cacheKey = `info_${message.toLowerCase().trim()}`;
+    if (intentClassificationCache.has(cacheKey)) {
+      console.log('[Luna] Usando resultado en caché para clasificación de consulta informativa');
+      const cachedResult = intentClassificationCache.get(cacheKey);
+      return cachedResult === true;
+    }
+    
+    // Usar la API de OpenAI para clasificar si el mensaje es una consulta informativa
+    const prompt = `
+Analiza el siguiente mensaje y determina si es una consulta informativa (pregunta que busca información).
+Las consultas informativas suelen incluir preguntas sobre horarios, ubicaciones, requisitos, procedimientos, etc.
+
+Mensaje: "${message}"
+
+Responde con un JSON en el siguiente formato:
+{
+  "isInformationQuery": true/false,
+  "confidence": 0.0-1.0
+}
+`;
+
+    // Llamar a la API
+    const apiMessages: ChatCompletionMessageParam[] = [
+      {
+        role: "system",
+        content: prompt
+      }
+    ];
+
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: apiMessages,
+      response_format: { type: 'json_object' },
+      max_tokens: 150,
+      temperature: 0.1
+    });
+
+    const result = JSON.parse(response.choices[0]?.message?.content || '{}');
+    
+    // Guardar en caché para futuras consultas
+    intentClassificationCache.set(cacheKey, result.isInformationQuery === true);
+    
+    if (result.isInformationQuery) {
+      console.log(`[Luna] Detectada consulta informativa (confianza: ${result.confidence})`);
+    }
+    
+    return result.isInformationQuery === true;
+  } catch (error) {
+    console.error('[Luna] Error al detectar consulta informativa:', error);
+    return false;
+  }
 }
