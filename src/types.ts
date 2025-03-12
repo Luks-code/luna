@@ -44,13 +44,6 @@ export interface ConversationData {
   messageHistory: ConversationMessage[];
 }
 
-// Modos de conversación
-export enum ConversationMode {
-  DEFAULT = 'DEFAULT',
-  INFO = 'INFO',
-  COMPLAINT = 'COMPLAINT'
-}
-
 // Estado de la conversación
 export interface ConversationState {
   isComplaintInProgress: boolean;
@@ -59,33 +52,17 @@ export interface ConversationState {
   awaitingConfirmation?: boolean;
   confirmedData?: ComplaintData;
   
-  // Nuevos campos para manejo de contexto
+  // Campos para manejo de contexto
   currentIntent?: IntentType;
-  previousIntent?: IntentType;
   pendingFields?: string[]; // Campos que faltan por completar
   conversationTopics?: string[]; // Temas discutidos en la conversación
   lastInteractionTimestamp?: number; // Para manejar tiempos de inactividad
-  interruptedFlow?: boolean; // Indica si el flujo fue interrumpido
-  interruptionContext?: { // Contexto de la interrupción
-    originalIntent?: string;
-    pendingQuestion?: string;
-    resumePoint?: string;
-  };
   confirmationRequested?: boolean; // Campo para rastrear si se ha solicitado confirmación
-  
-  // Nuevo campo para el modo de conversación
-  mode?: ConversationMode;
-  previousMode?: ConversationMode;
-  modeChangeMessageSent?: boolean; // Indica si ya se ha enviado el mensaje de cambio de modo
 }
 
 // Tipos de intención
 export enum IntentType {
-  COMPLAINT = 'COMPLAINT',
-  INQUIRY = 'INQUIRY',
-  GREETING = 'GREETING',
-  FOLLOWUP = 'FOLLOWUP',
-  OTHER = 'OTHER'
+  COMPLAINT = 'COMPLAINT'
 }
 
 // Comandos disponibles
@@ -96,11 +73,7 @@ export const COMMANDS = {
   REINICIAR: 'REINICIAR',
   CONFIRMAR: 'CONFIRMAR',
   MISRECLAMOS: 'MISRECLAMOS',
-  RECLAMO: 'RECLAMO',
-  INFO: 'INFO',
-  CONSULTA: 'CONSULTA',
-  NORMAL: 'NORMAL',
-  DEFAULT: 'DEFAULT'
+  RECLAMO: 'RECLAMO'
 } as const;
 
 export type Command = typeof COMMANDS[keyof typeof COMMANDS];

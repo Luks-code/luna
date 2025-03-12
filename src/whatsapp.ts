@@ -1,7 +1,7 @@
 import { Express, Request, Response } from 'express';
 import axios from 'axios';
-import { generateText, isReadyToSave } from './textGenerator';
-import { ConversationState, ConversationMode, ConversationMessage, GPTResponse, IntentType } from './types';
+import { generateText } from './textGenerator';
+import { ConversationState, ConversationMessage, GPTResponse, IntentType } from './types';
 import OpenAI from 'openai';
 import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 
@@ -308,7 +308,6 @@ async function processMessage(from: string, message: string, conversationState?:
 
   // Verificar si estamos en estado de confirmación de reclamo
   if ((conversationState.awaitingConfirmation || conversationState.confirmationRequested) && 
-      conversationState.mode === ConversationMode.COMPLAINT && 
       isReadyToSave(conversationState.complaintData)) {
     
     // Normalizar el mensaje para comparación
@@ -330,7 +329,6 @@ async function processMessage(from: string, message: string, conversationState?:
         conversationState.isComplaintInProgress = false;
         conversationState.awaitingConfirmation = false;
         conversationState.confirmationRequested = false;
-        conversationState.mode = ConversationMode.DEFAULT;
         conversationState.complaintData = {};
       } catch (error) {
         console.error('Error al guardar el reclamo:', error);
@@ -344,7 +342,6 @@ async function processMessage(from: string, message: string, conversationState?:
       conversationState.isComplaintInProgress = false;
       conversationState.awaitingConfirmation = false;
       conversationState.confirmationRequested = false;
-      conversationState.mode = ConversationMode.DEFAULT;
       conversationState.complaintData = {};
     } else {
       // Cualquier otra entrada no es válida
@@ -366,50 +363,8 @@ async function processMessage(from: string, message: string, conversationState?:
   // Generar respuesta con OpenAI
   const response = await generateText(message, conversationState, messageHistory);
 
-  // Detectar la intención del usuario basado en la respuesta
-  const newIntent = response.isComplaint ? IntentType.COMPLAINT : 
-                   (message.toLowerCase().includes('hola') || message.toLowerCase().includes('buenos')) ? IntentType.GREETING :
-                   (conversationState.isComplaintInProgress && !response.isComplaint) ? IntentType.INQUIRY :
-                   IntentType.OTHER;
-
   // Actualizar el contexto de la conversación
-  if (newIntent !== conversationState.currentIntent) {
-    // Guardar la intención anterior
-    conversationState.previousIntent = conversationState.currentIntent;
-    
-    // Si estábamos en medio de un reclamo y cambiamos a otra intención, marcar como interrumpido
-    if (conversationState.currentIntent === IntentType.COMPLAINT && 
-        conversationState.isComplaintInProgress && 
-        newIntent !== IntentType.COMPLAINT) {
-      conversationState.interruptedFlow = true;
-      conversationState.interruptionContext = {
-        originalIntent: IntentType.COMPLAINT,
-        resumePoint: conversationState.currentStep
-      };
-    }
-    
-    // Actualizar la intención actual
-    conversationState.currentIntent = newIntent;
-    
-    // Si cambiamos de COMPLAINT a INQUIRY, es posible que necesitemos cambiar a modo INFO
-    if (conversationState.currentIntent === IntentType.INQUIRY && 
-        conversationState.previousIntent === IntentType.COMPLAINT &&
-        conversationState.mode === ConversationMode.COMPLAINT) {
-      // Verificar si el mensaje parece una consulta informativa
-      if (await isLikelyInformationQuery(message)) {
-        console.log('[Luna] Cambiando temporalmente a modo INFO desde COMPLAINT');
-        conversationState.previousMode = conversationState.mode;
-        conversationState.mode = ConversationMode.INFO;
-        conversationState.modeChangeMessageSent = false;
-      }
-    }
-  }
-
-  // Si hay un flujo interrumpido y volvemos a la intención original, restaurar el contexto
-  if (conversationState.interruptedFlow && 
-      newIntent === conversationState.interruptionContext?.originalIntent) {
-    conversationState.interruptedFlow = false;
-  }
+  conversationState.currentIntent = IntentType.COMPLAINT;
 
   // Actualizar los temas de la conversación
   if (!conversationState.conversationTopics) {
@@ -422,30 +377,21 @@ async function processMessage(from: string, message: string, conversationState?:
     conversationState.conversationTopics.push(possibleTopic);
   }
 
-  // Actualizar el modo de conversación basado en la respuesta
-  if (response.isComplaint && conversationState.mode !== ConversationMode.COMPLAINT) {
-    // Si detectamos un reclamo y no estamos en modo COMPLAINT, cambiar al modo COMPLAINT
-    conversationState.previousMode = conversationState.mode;
-    conversationState.mode = ConversationMode.COMPLAINT;
-  }
-
   // Actualizar campos pendientes si es un reclamo
-  if (response.isComplaint) {
-    const pendingFields = [];
-    const complaintData = response.data || {};
-    
-    if (!complaintData.type) pendingFields.push('type');
-    if (!complaintData.description) pendingFields.push('description');
-    if (!complaintData.location) pendingFields.push('location');
-    if (!complaintData.citizenData?.name) pendingFields.push('name');
-    if (!complaintData.citizenData?.documentId) pendingFields.push('documentId');
-    if (!complaintData.citizenData?.address) pendingFields.push('address');
-    
-    conversationState.pendingFields = pendingFields;
-  }
+  const pendingFields = [];
+  const complaintData = response.data || {};
+  
+  if (!complaintData.type) pendingFields.push('type');
+  if (!complaintData.description) pendingFields.push('description');
+  if (!complaintData.location) pendingFields.push('location');
+  if (!complaintData.citizenData?.name) pendingFields.push('name');
+  if (!complaintData.citizenData?.documentId) pendingFields.push('documentId');
+  if (!complaintData.citizenData?.address) pendingFields.push('address');
+  
+  conversationState.pendingFields = pendingFields;
 
   // Actualizar el estado de la conversación con los datos del reclamo
-  if (response.isComplaint && response.data) {
+  if (response.data) {
     conversationState.isComplaintInProgress = true;
     
     // Actualizar el paso actual basado en los campos pendientes
@@ -485,44 +431,9 @@ async function processMessage(from: string, message: string, conversationState?:
   // Construir mensaje de respuesta
   let responseMessage = response.message || '';
   
-  // Añadir información sobre el flujo interrumpido si es relevante
-  if (conversationState.interruptedFlow && 
-      conversationState.currentIntent === IntentType.COMPLAINT &&
-      conversationState.previousIntent !== IntentType.COMPLAINT) {
-    responseMessage += "\n\nVolvamos a tu reclamo anterior. ";
-  }
-  
-  // Añadir información sobre el cambio de modo si es relevante
-  if (conversationState.mode === ConversationMode.COMPLAINT && 
-      !conversationState.modeChangeMessageSent &&
-      // No mostrar el mensaje si estamos volviendo de modo INFO a COMPLAINT
-      !(conversationState.previousMode === ConversationMode.INFO && conversationState.interruptedFlow)) {
-    // Si estamos en modo COMPLAINT y no se ha enviado el mensaje, mostrarlo
-    responseMessage = "[RECLAMO] " + responseMessage;
-    // Marcar que ya se envió el mensaje de cambio de modo
-    conversationState.modeChangeMessageSent = true;
-  } else if (conversationState.mode === ConversationMode.INFO && 
-             !conversationState.modeChangeMessageSent) {
-    // Si estamos en modo INFO y no se ha enviado el mensaje, mostrarlo
-    responseMessage = "[INFO] " + responseMessage;
-    // Marcar que ya se envió el mensaje de cambio de modo
-    conversationState.modeChangeMessageSent = true;
-    
-    // Si venimos de un reclamo, marcarlo como flujo interrumpido para poder volver después
-    if (conversationState.previousMode === ConversationMode.COMPLAINT && 
-        conversationState.isComplaintInProgress && 
-        !conversationState.interruptedFlow) {
-      conversationState.interruptedFlow = true;
-      conversationState.interruptionContext = {
-        originalIntent: IntentType.COMPLAINT,
-        resumePoint: conversationState.currentStep
-      };
-    }
-  }
-  
   // Enviar respuesta
   await sendWhatsAppMessage(from, responseMessage);
-
+  
   // Añadir respuesta al historial
   await addMessageToHistory(from, 'assistant', responseMessage);
 
@@ -603,61 +514,37 @@ async function saveComplaint(from: string, complaintData: any) {
   }
 }
 
-// Función para determinar si un mensaje es probablemente una consulta informativa usando IA
-async function isLikelyInformationQuery(message: string): Promise<boolean> {
-  console.log('[Luna] Verificando si el mensaje es una consulta informativa usando IA');
+// Función para verificar si un reclamo está listo para guardar
+function isReadyToSave(complaintData: any): boolean {
+  console.log('Verificando si el reclamo está listo para guardar:', JSON.stringify(complaintData, null, 2));
   
-  try {
-    // Verificar si hay una entrada en caché para este mensaje
-    const cacheKey = `info_${message.toLowerCase().trim()}`;
-    if (intentClassificationCache.has(cacheKey)) {
-      console.log('[Luna] Usando resultado en caché para clasificación de consulta informativa');
-      const cachedResult = intentClassificationCache.get(cacheKey);
-      return cachedResult === true;
-    }
-    
-    // Usar la API de OpenAI para clasificar si el mensaje es una consulta informativa
-    const prompt = `
-Analiza el siguiente mensaje y determina si es una consulta informativa (pregunta que busca información).
-Las consultas informativas suelen incluir preguntas sobre horarios, ubicaciones, requisitos, procedimientos, etc.
-
-Mensaje: "${message}"
-
-Responde con un JSON en el siguiente formato:
-{
-  "isInformationQuery": true/false,
-  "confidence": 0.0-1.0
-}
-`;
-
-    // Llamar a la API
-    const apiMessages: ChatCompletionMessageParam[] = [
-      {
-        role: "system",
-        content: prompt
-      }
-    ];
-
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: apiMessages,
-      response_format: { type: 'json_object' },
-      max_tokens: 150,
-      temperature: 0.1
-    });
-
-    const result = JSON.parse(response.choices[0]?.message?.content || '{}');
-    
-    // Guardar en caché para futuras consultas
-    intentClassificationCache.set(cacheKey, result.isInformationQuery === true);
-    
-    if (result.isInformationQuery) {
-      console.log(`[Luna] Detectada consulta informativa (confianza: ${result.confidence})`);
-    }
-    
-    return result.isInformationQuery === true;
-  } catch (error) {
-    console.error('[Luna] Error al detectar consulta informativa:', error);
+  // Verificar que todos los campos requeridos estén presentes y no estén vacíos
+  if (!complaintData) {
+    console.log('No hay datos de reclamo');
     return false;
   }
+
+  const hasType = !!complaintData.type && complaintData.type.trim() !== '';
+  const hasDescription = !!complaintData.description && complaintData.description.trim() !== '';
+  const hasLocation = !!complaintData.location && complaintData.location.trim() !== '';
+  
+  const hasCitizenData = !!complaintData.citizenData;
+  const hasName = hasCitizenData && !!complaintData.citizenData.name && complaintData.citizenData.name.trim() !== '';
+  const hasDocumentId = hasCitizenData && !!complaintData.citizenData.documentId && complaintData.citizenData.documentId.trim() !== '';
+  const hasAddress = hasCitizenData && !!complaintData.citizenData.address && complaintData.citizenData.address.trim() !== '';
+  
+  // Logging detallado para facilitar la depuración
+  console.log('Verificación de campos:');
+  console.log(`- Tipo: ${hasType ? 'OK' : 'FALTA'}`);
+  console.log(`- Descripción: ${hasDescription ? 'OK' : 'FALTA'}`);
+  console.log(`- Ubicación: ${hasLocation ? 'OK' : 'FALTA'}`);
+  console.log(`- Datos del ciudadano: ${hasCitizenData ? 'OK' : 'FALTA'}`);
+  console.log(`- Nombre: ${hasName ? 'OK' : 'FALTA'}`);
+  console.log(`- DNI: ${hasDocumentId ? 'OK' : 'FALTA'}`);
+  console.log(`- Dirección: ${hasAddress ? 'OK' : 'FALTA'}`);
+  
+  const isReady = hasType && hasDescription && hasLocation && hasName && hasDocumentId && hasAddress;
+  console.log(`Reclamo ${isReady ? 'LISTO' : 'NO LISTO'} para guardar`);
+  
+  return isReady;
 }

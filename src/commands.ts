@@ -1,4 +1,4 @@
-import { Command, COMMANDS, ComplaintStatus, ConversationState, ConversationMode } from './types';
+import { Command, COMMANDS, ComplaintStatus, ConversationState } from './types';
 import { setConversationState, initialConversationState, addMessageToHistory, redis, deleteConversation } from './redis';
 import { sendWhatsAppMessage } from './whatsapp';
 import { prisma } from './prisma';
@@ -29,20 +29,12 @@ export async function handleCommand(from: string, command: string, state: Conver
       break;
     case COMMANDS.RECLAMO:
       if (args.length === 0) {
-        // Si no hay argumentos, cambiar al modo de reclamos
-        await handleModeChange(from, state, ConversationMode.COMPLAINT);
+        // Si no hay argumentos, simplemente confirmar que estamos en modo reclamos
+        await handleComplaintMode(from, state);
       } else {
         // Si hay argumentos, buscar detalles del reclamo específico
         await handleComplaintDetails(from, parseInt(args[0]));
       }
-      break;
-    case COMMANDS.INFO:
-    case COMMANDS.CONSULTA:
-      await handleModeChange(from, state, ConversationMode.INFO);
-      break;
-    case COMMANDS.NORMAL:
-    case COMMANDS.DEFAULT:
-      await handleModeChange(from, state, ConversationMode.DEFAULT);
       break;
     default:
       const message = 'Comando no reconocido. Usa /ayuda para ver los comandos disponibles.';
@@ -82,10 +74,8 @@ async function handleHelp(from: string): Promise<void> {
 /reiniciar - Reinicia la conversación
 /confirmar - Confirma el reclamo cuando se solicite
 /misreclamos - Muestra todos tus reclamos
-/reclamo - Cambia al modo de reclamos para iniciar un nuevo reclamo
+/reclamo - Inicia un nuevo reclamo
 /reclamo <número> - Muestra los detalles de un reclamo específico
-/info o /consulta - Cambia al modo de información para hacer consultas
-/normal o /default - Vuelve al modo normal de conversación
 
 Para iniciar un reclamo, puedes usar el comando /reclamo o simplemente describir tu problema y te guiaré en el proceso.`;
 
@@ -238,36 +228,14 @@ ${statusEmoji} Estado: ${complaint.status}${complaint.status === ComplaintStatus
   }
 }
 
-// Función para cambiar el modo de conversación
-async function handleModeChange(from: string, state: ConversationState, newMode: ConversationMode): Promise<void> {
-  // Guardar el modo anterior
-  state.previousMode = state.mode;
-  
-  // Establecer el nuevo modo
-  state.mode = newMode;
-  
-  // Reiniciar la bandera de mensaje de cambio de modo
-  state.modeChangeMessageSent = false;
-  
-  // Mensaje según el modo
-  let message = '';
-  
-  switch (newMode) {
-    case ConversationMode.INFO:
-      message = 'He cambiado al modo de información. Ahora puedes hacerme cualquier consulta sobre servicios, trámites o información municipal y utilizaré nuestra base de conocimiento para responderte de la manera más completa posible.';
-      break;
-    case ConversationMode.COMPLAINT:
-      message = 'He cambiado al modo de reclamos. Ahora puedes describir tu problema y te guiaré para registrar un reclamo formal.';
-      break;
-    case ConversationMode.DEFAULT:
-      message = 'He vuelto al modo normal. Puedo ayudarte tanto con consultas de información como con reclamos según lo que necesites.';
-      break;
-  }
+// Función para confirmar que estamos en modo reclamos
+async function handleComplaintMode(from: string, state: ConversationState): Promise<void> {
+  // Mensaje para el modo de reclamos
+  const message = 'Estoy en modo de reclamos. Puedes describir tu problema y te guiaré para registrar un reclamo formal.';
   
   // Guardar el estado actualizado
   await setConversationState(from, state);
   
-  // Enviar mensaje de confirmación
+  // Enviar mensaje al usuario
   await sendWhatsAppMessage(from, message);
-  await addMessageToHistory(from, 'assistant', message);
 }
