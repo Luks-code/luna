@@ -67,27 +67,34 @@ Responde con un JSON en el siguiente formato:
   }
 }
 
-// Función para formatear el historial de mensajes
-function formatMessageHistory(messageHistory: ConversationMessage[]): string {
-  if (!messageHistory || messageHistory.length === 0) {
-    return "No hay mensajes previos.";
-  }
-  
-  return messageHistory.map(msg => {
-    return `${msg.role === 'user' ? 'Usuario' : 'Asistente'}: ${msg.content}`;
-  }).join('\n');
-}
-
 // Función para llamar a la API de OpenAI con un prompt
-async function callOpenAI(prompt: string): Promise<GPTResponse> {
+async function callOpenAI(systemPrompt: string, messageHistory: ConversationMessage[] = [], userMessage?: string): Promise<GPTResponse> {
   try {
-    // Construir el mensaje del sistema
+    // Construir los mensajes para la API
     const apiMessages: ChatCompletionMessageParam[] = [
       {
         role: "system",
-        content: prompt
+        content: systemPrompt
       }
     ];
+
+    // Añadir el historial de mensajes si existe
+    if (messageHistory && messageHistory.length > 0) {
+      apiMessages.push(
+        ...messageHistory.map(msg => ({
+          role: msg.role as "user" | "assistant",
+          content: msg.content
+        }))
+      );
+    }
+
+    // Añadir el mensaje actual del usuario si se proporciona
+    if (userMessage) {
+      apiMessages.push({
+        role: "user",
+        content: userMessage
+      });
+    }
 
     // Llamar a la API
     const response = await openai.chat.completions.create({
@@ -180,21 +187,10 @@ Dirección: ${complaintData.citizenData?.address}
   }
   
   // Para otros casos, continuar con el flujo normal
-  const prompt = `
-${getSystemPrompt(state)}
-
-### Historial de conversación:
-${formatMessageHistory(history)}
-
-### Estado actual:
-${JSON.stringify(state, null, 2)}
-
-### Mensaje del usuario:
-${message}
-
-### Genera una respuesta:`;
+  const systemPrompt = getSystemPrompt(state);
   
-  return await callOpenAI(prompt);
+  // Llamar a OpenAI con el prompt del sistema, historial y mensaje actual
+  return await callOpenAI(systemPrompt, history, message);
 }
 
 // Procesador para el modo de reclamos
@@ -321,7 +317,7 @@ function hasRequestedConfirmation(state: ConversationState): boolean {
   return !!state.confirmationRequested;
 }
 
-// Función para obtener el prompt del sistema
+// Función para obtener el prompt del sistema según el estado
 function getSystemPrompt(conversationState: ConversationState): string {
   // Prompt base con instrucciones generales
   const basePrompt = `
