@@ -213,6 +213,7 @@ export default generateText;
 // Función para obtener el prompt del sistema basado en el estado actual
 // Modificación a la función getSystemPrompt en textGenerator.ts
 function getSystemPrompt(conversationState: ConversationState): string {
+  // TODO sistema de manejo de spam
   // Detectar si estamos manejando un caso de spam/reclamos repetidos
   const isPseudoComplaintFlow = conversationState.pseudoComplaintHandling || false;
   const spamLevel = conversationState.spamMetrics?.level || 0;
