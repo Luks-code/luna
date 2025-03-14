@@ -144,7 +144,7 @@ export const initialConversationState: ConversationState = {
   complaintData: {},
   currentStep: 'INIT',
   awaitingConfirmation: false,
-  
+
   // Nuevos campos de contexto
   currentIntent: IntentType.GREETING,
   previousIntent: undefined,
@@ -156,5 +156,7 @@ export const initialConversationState: ConversationState = {
     originalIntent: undefined,
     pendingQuestion: undefined,
     resumePoint: undefined
-  }
+  },
+  pseudoComplaintHandling: false,
+  spamMetrics: undefined
 };
