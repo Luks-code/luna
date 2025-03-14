@@ -1,0 +1,77 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// Modelo para los usuarios del sistema
+model User {
+  id           Int       @id @default(autoincrement())
+  email        String    @unique
+  name         String
+  password     String    // En producción debería estar hasheada
+  role         String    @default("user") // "admin" o "user"
+  status       String    @default("active")
+  departmentId Int
+  department   Department @relation(fields: [departmentId], references: [id])
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([email])
+  @@index([role])
+}
+
+// Modelo para los departamentos
+model Department {
+  id          Int       @id @default(autoincrement())
+  name        String    @unique
+  users       User[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+// Modelo para los ciudadanos
+model Citizen {
+  id          Int        @id @default(autoincrement())
+  name        String
+  documentId  String     @unique // Número de documento
+  phone       String     @unique // Número de WhatsApp
+  address     String
+  complaints  Complaint[] // Relación con los reclamos
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([phone])
+  @@index([documentId])
+}
+
+enum ComplaintStatus {
+  PENDIENTE
+  EN_PROCESO
+  RESUELTO
+  CANCELADO
+}
+
+// Modelo para los reclamos
+model Complaint {
+  id          Int       @id @default(autoincrement())
+  type        String    // Tipo de reclamo (AP, BL, R, etc.)
+  description String    @db.Text
+  location    String    // Ubicación específica del reclamo
+  status      ComplaintStatus @default(PENDIENTE) // Estado del reclamo
+  rejectReason String?   // Motivo del rechazo
+  citizenId   Int
+  citizen     Citizen   @relation(fields: [citizenId], references: [id])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  notes       String?   @db.Text // Notas adicionales
+  
+  @@index([type])
+  @@index([citizenId])
+}

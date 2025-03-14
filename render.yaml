@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: luna-agent
+    env: node
+    buildCommand: npm install && npx prisma generate
+    startCommand: npm run start-bot
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: PINECONE_API_KEY
+        sync: false
+      - key: PINECONE_ENVIRONMENT
+        value: gcp-starter
+      - key: PINECONE_INDEX_NAME
+        value: municipalidad-info
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      - key: PORT
+        value: 3000
