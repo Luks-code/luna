@@ -2,8 +2,17 @@
 export interface GPTResponse {
   isComplaint: boolean;
   data?: ComplaintData;
+  /**
+   * @deprecated Este campo será eliminado en futuras versiones. 
+   * Incluir la pregunta directamente al final del campo message.
+   */
   nextQuestion?: string;
   message: string;
+  /**
+   * Si es true, indica que la respuesta no debe pasar por el proceso de completado
+   * Útil para respuestas donde no queremos que el modelo alucine información
+   */
+  skipCompletion?: boolean;
 }
 
 // Datos del reclamo
@@ -45,27 +54,17 @@ export interface ConversationState {
   awaitingConfirmation?: boolean;
   confirmedData?: ComplaintData;
   
-  // Nuevos campos para manejo de contexto
+  // Campos para manejo de contexto
   currentIntent?: IntentType;
-  previousIntent?: IntentType;
   pendingFields?: string[]; // Campos que faltan por completar
   conversationTopics?: string[]; // Temas discutidos en la conversación
   lastInteractionTimestamp?: number; // Para manejar tiempos de inactividad
-  interruptedFlow?: boolean; // Indica si el flujo fue interrumpido
-  interruptionContext?: { // Contexto de la interrupción
-    originalIntent?: string;
-    pendingQuestion?: string;
-    resumePoint?: string;
-  };
+  confirmationRequested?: boolean; // Campo para rastrear si se ha solicitado confirmación
 }
 
 // Tipos de intención
 export enum IntentType {
-  COMPLAINT = 'COMPLAINT',
-  INQUIRY = 'INQUIRY',
-  GREETING = 'GREETING',
-  FOLLOWUP = 'FOLLOWUP',
-  OTHER = 'OTHER'
+  COMPLAINT = 'COMPLAINT'
 }
 
 // Comandos disponibles
@@ -81,7 +80,7 @@ export const COMMANDS = {
 
 export type Command = typeof COMMANDS[keyof typeof COMMANDS];
 
-// Estado del reclamo
+// Estados de reclamos
 export enum ComplaintStatus {
   PENDIENTE = 'PENDIENTE',
   EN_PROCESO = 'EN_PROCESO',

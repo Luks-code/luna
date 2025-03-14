@@ -59,7 +59,7 @@ export async function getIndex() {
         spec: {
           serverless: {
             cloud: 'gcp',
-            region: 'us-central1'
+            region: 'us-west1'  // Cambiado de 'us-central1' a 'us-west1' para compatibilidad con plan gratuito
           }
         }
       });

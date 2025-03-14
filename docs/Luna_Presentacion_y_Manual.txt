@@ -1,0 +1,289 @@
+# NINA - CHATBOT MUNICIPAL
+# PRESENTACIÓN Y MANUAL DE USUARIO
+# Fecha: 09/03/2025
+
+==============================================================================
+                         ÍNDICE DE CONTENIDOS
+==============================================================================
+
+PARTE I: PRESENTACIÓN DEL SISTEMA
+1. Descripción General
+2. Arquitectura del Sistema
+3. Funcionalidades Principales
+4. Flujos de Interacción
+5. Mejoras Recientes
+6. Conclusión
+
+PARTE II: MANUAL DE USUARIO
+1. Primeros Pasos
+2. Cómo Realizar Consultas Informativas
+3. Cómo Realizar Reclamos
+4. Comandos Especiales
+5. Preguntas Frecuentes
+6. Solución de Problemas
+
+==============================================================================
+                         PARTE I: PRESENTACIÓN DEL SISTEMA
+==============================================================================
+
+# 1. DESCRIPCIÓN GENERAL
+
+Nina es un chatbot avanzado diseñado específicamente para la municipalidad, que combina inteligencia artificial con un sistema de gestión de reclamos y consultas de información. Su principal objetivo es brindar asistencia a los ciudadanos de manera eficiente, permitiéndoles realizar reclamos sobre servicios municipales y obtener información relevante sobre trámites y servicios.
+
+# 2. ARQUITECTURA DEL SISTEMA
+
+## 2.1 Componentes Principales
+
+- Motor de Procesamiento de Lenguaje Natural: Basado en OpenAI, permite entender las consultas de los usuarios en lenguaje natural.
+- Sistema RAG (Retrieval-Augmented Generation): Permite recuperar información precisa de la base de documentos municipales.
+- Gestor de Reclamos: Procesa y registra los reclamos de los ciudadanos de manera estructurada.
+- Sistema de Estado de Conversación: Mantiene el contexto de las conversaciones para ofrecer una experiencia fluida.
+
+## 2.2 Tecnologías Utilizadas
+
+- TypeScript: Lenguaje de programación principal para el desarrollo del bot.
+- OpenAI API: Para generación de respuestas y clasificación de intenciones.
+- Langchain: Para gestión de embeddings y consultas en el sistema RAG.
+- WhatsApp API: Para la interfaz de comunicación con los ciudadanos.
+
+# 3. FUNCIONALIDADES PRINCIPALES
+
+## 3.1 Sistema Híbrido de Detección de Reclamos
+
+El bot implementa un enfoque en dos fases para detectar reclamos:
+
+- Fase 1 - Detección Rápida: Utiliza palabras clave y patrones para identificar rápidamente reclamos evidentes.
+  Ejemplos de patrones: "queja", "reclamo", "no funciona", "está roto", "problema con"
+
+- Fase 2 - Clasificación IA: Para mensajes ambiguos, utiliza IA para determinar si contienen un reclamo.
+  Ejemplo: "Los chicos no pueden jugar tranquilos en la vereda" → La IA detecta que esto implica un reclamo sobre seguridad o infraestructura.
+
+## 3.2 Procesamiento de Mensajes Mixtos
+
+El bot puede identificar mensajes que contienen tanto consultas informativas como reclamos:
+
+Ejemplo: "Quiero información sobre trámites y también reportar que hay un árbol a punto de caerse"
+
+El sistema:
+1. Detecta patrones de transición como "también", "además", "por cierto"
+2. Extrae la parte del mensaje que contiene el reclamo
+3. Procesa cada parte de manera adecuada
+
+## 3.3 Gestión de Reclamos
+
+El bot recopila de manera estructurada toda la información necesaria para un reclamo:
+
+- Tipo de reclamo: Categorización (SAT, Alumbrado, Espacios Verdes, etc.)
+- Descripción: Detalles del problema
+- Ubicación: Dirección o lugar del problema
+- Datos del ciudadano: Nombre, DNI y dirección
+
+Una vez completados todos los datos, solicita confirmación al usuario antes de registrar el reclamo.
+
+## 3.4 Sistema de Recuperación de Información (RAG)
+
+Para consultas informativas, el bot:
+1. Analiza la consulta del usuario
+2. Busca en la base de documentos municipales
+3. Evalúa la confiabilidad de la información encontrada
+4. Genera una respuesta contextualizada basada en los documentos relevantes
+
+## 3.5 Gestión de Estados de Conversación
+
+El bot mantiene diferentes modos de conversación:
+- Modo DEFAULT: Estado inicial para cualquier consulta
+- Modo INFO: Para consultas informativas
+- Modo COMPLAINT: Para gestión de reclamos
+
+Puede transitar entre estos modos según la intención del usuario, incluso interrumpiendo un flujo para atender una consulta urgente y luego retomando el proceso original.
+
+# 4. FLUJOS DE INTERACCIÓN
+
+## 4.1 Flujo de Reclamo
+
+1. Detección: El usuario expresa un reclamo
+2. Recopilación de datos: El bot solicita información faltante
+3. Confirmación: Se muestra un resumen y se solicita confirmación
+4. Registro: Se guarda el reclamo en el sistema
+5. Seguimiento: El usuario puede consultar el estado de su reclamo
+
+## 4.2 Flujo de Consulta Informativa
+
+1. Detección: El usuario realiza una pregunta
+2. Búsqueda: El sistema busca información relevante
+3. Evaluación: Se verifica la confiabilidad de la información
+4. Respuesta: Se proporciona la información solicitada con fuentes
+
+# 5. MEJORAS RECIENTES
+
+## 5.1 Detección Mejorada de Reclamos
+
+Se ha implementado un sistema más robusto para detectar reclamos, incluyendo:
+- Patrones específicos para problemas comunes (árboles caídos, basura, etc.)
+- Detección de lenguaje implícito de reclamos
+- Manejo de mensajes mixtos (información + reclamo)
+
+## 5.2 Gestión de Transiciones
+
+El bot ahora puede:
+- Detectar cuando el usuario desea cambiar de tema
+- Cancelar un reclamo en progreso si el usuario lo solicita
+- Manejar interrupciones temporales para consultas urgentes
+
+## 5.3 Verificación de Completitud de Datos
+
+Se ha mejorado el sistema de verificación para asegurar que todos los datos necesarios estén completos antes de solicitar confirmación, con especial atención a:
+- Validación de la dirección del ciudadano
+- Detección automática de posibles direcciones en los mensajes
+- Logs detallados para facilitar la depuración
+
+# 6. CONCLUSIÓN
+
+Nina representa una solución tecnológica avanzada para mejorar la comunicación entre la municipalidad y los ciudadanos. Su capacidad para entender el lenguaje natural, gestionar reclamos y proporcionar información precisa la convierte en una herramienta valiosa para la administración municipal, mejorando la eficiencia en la atención al ciudadano y la gestión de servicios públicos.
+
+==============================================================================
+                         PARTE II: MANUAL DE USUARIO
+==============================================================================
+
+# 1. PRIMEROS PASOS
+
+## 1.1 Cómo Iniciar una Conversación con Nina
+
+Para comenzar a utilizar el chatbot Nina, simplemente envíe un mensaje a través de WhatsApp al número oficial de la municipalidad. Nina responderá con un mensaje de bienvenida explicando brevemente sus capacidades.
+
+Ejemplo de mensaje inicial:
+"Hola, necesito información sobre trámites municipales"
+
+## 1.2 Qué Puede Hacer Nina
+
+Nina puede ayudarlo con:
+- Información sobre trámites y servicios municipales
+- Registro de reclamos por problemas en servicios públicos
+- Consulta del estado de reclamos previamente realizados
+- Información sobre horarios, ubicaciones y requisitos
+
+# 2. CÓMO REALIZAR CONSULTAS INFORMATIVAS
+
+## 2.1 Tipos de Consultas que Puede Responder
+
+Nina puede responder preguntas sobre:
+- Trámites municipales (requisitos, horarios, ubicaciones)
+- Servicios públicos
+- Eventos municipales
+- Información de contacto de oficinas
+- Procedimientos administrativos
+
+## 2.2 Cómo Formular Preguntas Efectivas
+
+Para obtener la mejor respuesta, sea específico en su consulta:
+
+Ejemplos:
+- "¿Cuáles son los requisitos para renovar la licencia de conducir?"
+- "¿Dónde puedo pagar los impuestos municipales?"
+- "¿Cuál es el horario de atención de la oficina de catastro?"
+
+## 2.3 Cómo Solicitar Aclaraciones
+
+Si la respuesta no es clara o necesita más información, simplemente pregunte:
+- "¿Puedes explicarme más sobre esto?"
+- "Necesito más detalles sobre los requisitos"
+- "No entendí la parte sobre los horarios"
+
+# 3. CÓMO REALIZAR RECLAMOS
+
+## 3.1 Tipos de Reclamos que Puede Procesar
+
+Nina puede gestionar reclamos relacionados con:
+- Servicios de Agua y Cloacas (SAT)
+- Alumbrado público
+- Recolección de basura
+- Mantenimiento de espacios verdes
+- Problemas en la vía pública
+- Otros servicios municipales
+
+## 3.2 Información Necesaria para un Reclamo
+
+Para procesar un reclamo, Nina necesitará recopilar:
+- Tipo de reclamo
+- Descripción detallada del problema
+- Ubicación exacta del problema
+- Sus datos personales:
+  * Nombre completo
+  * Número de documento (DNI)
+  * Dirección de residencia
+
+## 3.3 Proceso Paso a Paso
+
+1. Inicie mencionando su problema:
+   "Quiero hacer un reclamo porque hay un árbol a punto de caerse en mi calle"
+
+2. Nina detectará que es un reclamo y le solicitará la información faltante:
+   - Si no especificó el tipo, le preguntará
+   - Le pedirá detalles sobre el problema
+   - Le solicitará la ubicación exacta
+   - Le pedirá sus datos personales
+
+3. Una vez completada toda la información, Nina le mostrará un resumen y le pedirá confirmación:
+   - Responda "CONFIRMAR" para registrar el reclamo
+   - Responda "CANCELAR" para descartar el reclamo
+
+4. Tras confirmar, recibirá un número de seguimiento para su reclamo
+
+## 3.4 Cómo Verificar el Estado de un Reclamo
+
+Para consultar el estado de un reclamo en progreso, utilice el comando:
+"/estado"
+
+Nina le mostrará qué información ya ha proporcionado y qué datos faltan.
+
+# 4. COMANDOS ESPECIALES
+
+Nina reconoce varios comandos especiales que puede utilizar en cualquier momento:
+
+- /ayuda - Muestra información de ayuda general
+- /estado - Muestra el estado actual de un reclamo en progreso
+- /cancelar - Cancela un reclamo en progreso
+- /reiniciar - Reinicia la conversación
+- /menu - Muestra un menú con las principales opciones
+
+# 5. PREGUNTAS FRECUENTES
+
+## 5.1 ¿Puedo cambiar la información de mi reclamo después de iniciarlo?
+
+Sí, mientras el reclamo esté en progreso y no haya sido confirmado, puede proporcionar nueva información que reemplazará los datos anteriores.
+
+## 5.2 ¿Qué hago si Nina no entiende mi consulta?
+
+Intente reformular su pregunta de manera más clara y específica. Si el problema persiste, puede escribir "/ayuda" para recibir asistencia.
+
+## 5.3 ¿Puedo hacer una consulta mientras estoy en medio de un reclamo?
+
+Sí, Nina puede manejar consultas informativas mientras está procesando un reclamo. Simplemente formule su pregunta y Nina la responderá, para luego retomar el proceso de reclamo donde lo dejó.
+
+## 5.4 ¿Es seguro proporcionar mis datos personales?
+
+Sí, toda la información personal se maneja de acuerdo con las políticas de privacidad de la municipalidad y solo se utiliza para el procesamiento de su reclamo.
+
+# 6. SOLUCIÓN DE PROBLEMAS
+
+## 6.1 Nina no responde
+
+Si Nina no responde después de un tiempo razonable (más de 2 minutos), intente enviar otro mensaje o reiniciar la conversación con "/reiniciar".
+
+## 6.2 Respuestas incorrectas o irrelevantes
+
+Si Nina proporciona información que parece incorrecta o no relacionada con su consulta:
+1. Indique que la respuesta no es útil
+2. Reformule su pregunta de manera más específica
+3. Si el problema persiste, contacte al soporte técnico de la municipalidad
+
+## 6.3 Problemas con el registro de reclamos
+
+Si experimenta dificultades para registrar un reclamo:
+1. Verifique que está proporcionando toda la información solicitada
+2. Intente usar el comando "/estado" para ver qué información falta
+3. Si el problema persiste, utilice el comando "/reiniciar" y comience de nuevo
+
+==============================================================================
+                         FIN DEL DOCUMENTO
+==============================================================================

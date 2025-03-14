@@ -37,15 +37,49 @@ export async function findOrCreateCitizen(data: {
   phone: string;
   address: string;
 }) {
-  return await prisma.citizen.upsert({
-    where: { documentId: data.documentId },
-    update: {
-      name: data.name,
-      phone: data.phone,
-      address: data.address
-    },
-    create: data
-  });
+  try {
+    // Primero intentamos encontrar por documentId
+    let citizen = await prisma.citizen.findUnique({
+      where: { documentId: data.documentId }
+    });
+
+    if (citizen) {
+      // Si existe, actualizamos sus datos
+      return await prisma.citizen.update({
+        where: { id: citizen.id },
+        data: {
+          name: data.name,
+          phone: data.phone,
+          address: data.address
+        }
+      });
+    }
+
+    // Si no existe por documentId, buscamos por teléfono
+    citizen = await prisma.citizen.findUnique({
+      where: { phone: data.phone }
+    });
+
+    if (citizen) {
+      // Si existe por teléfono, actualizamos sus datos
+      return await prisma.citizen.update({
+        where: { id: citizen.id },
+        data: {
+          name: data.name,
+          documentId: data.documentId,
+          address: data.address
+        }
+      });
+    }
+
+    // Si no existe, lo creamos
+    return await prisma.citizen.create({
+      data
+    });
+  } catch (error) {
+    console.error('Error en findOrCreateCitizen:', error);
+    throw error;
+  }
 }
 
 export async function createComplaint(data: {

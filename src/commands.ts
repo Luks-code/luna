@@ -1,5 +1,5 @@
 import { Command, COMMANDS, ComplaintStatus, ConversationState } from './types';
-import { setConversationState, initialConversationState, addMessageToHistory } from './redis';
+import { setConversationState, initialConversationState, addMessageToHistory, redis, deleteConversation } from './redis';
 import { sendWhatsAppMessage } from './whatsapp';
 import { prisma } from './prisma';
 
@@ -29,10 +29,10 @@ export async function handleCommand(from: string, command: string, state: Conver
       break;
     case COMMANDS.RECLAMO:
       if (args.length === 0) {
-        const message = 'Por favor, especifica el número de reclamo. Ejemplo: /reclamo 123';
-        await sendWhatsAppMessage(from, message);
-        await addMessageToHistory(from, 'assistant', message);
+        // Si no hay argumentos, simplemente confirmar que estamos en modo reclamos
+        await handleComplaintMode(from, state);
       } else {
+        // Si hay argumentos, buscar detalles del reclamo específico
         await handleComplaintDetails(from, parseInt(args[0]));
       }
       break;
@@ -48,13 +48,22 @@ async function handleCancel(from: string, state: ConversationState): Promise<voi
   
   if (!state.isComplaintInProgress) {
     message = 'No hay ninguna operación en curso para cancelar.';
+    await sendWhatsAppMessage(from, message);
+    await addMessageToHistory(from, 'assistant', message);
   } else {
-    await setConversationState(from, initialConversationState);
-    message = 'Se ha cancelado el reclamo en curso. Puedes iniciar uno nuevo cuando quieras.';
+    // Mensaje de cancelación
+    message = 'Se ha cancelado el reclamo en curso.';
+    await sendWhatsAppMessage(from, message);
+    await addMessageToHistory(from, 'assistant', message);
+    
+    // Mensaje de reinicio
+    const resetMessage = 'La conversación ha sido reiniciada completamente.';
+    await sendWhatsAppMessage(from, resetMessage);
+    
+    // Eliminar completamente la conversación usando la nueva función
+    const deleted = await deleteConversation(from);
+    console.log(`[Comando /cancelar] Conversación eliminada: ${deleted ? 'Sí' : 'No'}`);
   }
-  
-  await sendWhatsAppMessage(from, message);
-  await addMessageToHistory(from, 'assistant', message);
 }
 
 async function handleHelp(from: string): Promise<void> {
@@ -65,9 +74,10 @@ async function handleHelp(from: string): Promise<void> {
 /reiniciar - Reinicia la conversación
 /confirmar - Confirma el reclamo cuando se solicite
 /misreclamos - Muestra todos tus reclamos
+/reclamo - Inicia un nuevo reclamo
 /reclamo <número> - Muestra los detalles de un reclamo específico
 
-Para iniciar un reclamo, simplemente describe tu problema y te guiaré en el proceso.`;
+Para iniciar un reclamo, puedes usar el comando /reclamo o simplemente describir tu problema y te guiaré en el proceso.`;
 
   await sendWhatsAppMessage(from, helpMessage);
   await addMessageToHistory(from, 'assistant', helpMessage);
@@ -94,11 +104,14 @@ ${complaintData.citizenData?.address ? `✅ Dirección: ${complaintData.citizenD
 }
 
 async function handleReset(from: string): Promise<void> {
-  const message = 'La conversación ha sido reiniciada. ¿En qué puedo ayudarte?';
+  const message = 'La conversación ha sido reiniciada completamente. ¿En qué puedo ayudarte?';
   
-  await setConversationState(from, initialConversationState);
+  // Eliminar completamente la conversación de Redis usando la nueva función
+  const deleted = await deleteConversation(from);
+  console.log(`[Comando /reiniciar] Conversación eliminada: ${deleted ? 'Sí' : 'No'}`);
+  
+  // Enviar mensaje de confirmación
   await sendWhatsAppMessage(from, message);
-  await addMessageToHistory(from, 'assistant', message);
 }
 
 async function handleConfirm(from: string, state: ConversationState): Promise<void> {
@@ -213,4 +226,16 @@ ${statusEmoji} Estado: ${complaint.status}${complaint.status === ComplaintStatus
     await sendWhatsAppMessage(from, errorMessage);
     await addMessageToHistory(from, 'assistant', errorMessage);
   }
+}
+
+// Función para confirmar que estamos en modo reclamos
+async function handleComplaintMode(from: string, state: ConversationState): Promise<void> {
+  // Mensaje para el modo de reclamos
+  const message = 'Estoy en modo de reclamos. Puedes describir tu problema y te guiaré para registrar un reclamo formal.';
+  
+  // Guardar el estado actualizado
+  await setConversationState(from, state);
+  
+  // Enviar mensaje al usuario
+  await sendWhatsAppMessage(from, message);
 }
