@@ -185,11 +185,20 @@ export const initialConversationState: ConversationState = {
   },
   currentStep: 'INIT',
   awaitingConfirmation: false,
-  
-  // Campos para manejo de contexto
-  currentIntent: IntentType.COMPLAINT,
+
+  // Nuevos campos de contexto
+  currentIntent: IntentType.GREETING,
+  previousIntent: undefined,
   pendingFields: [],
   conversationTopics: [],
   lastInteractionTimestamp: Date.now(),
-  confirmationRequested: false
+  interruptedFlow: false,
+  interruptionContext: {
+    originalIntent: undefined,
+    pendingQuestion: undefined,
+    resumePoint: undefined
+  },
+  pseudoComplaintHandling: false,
+  spamMetrics: undefined
+
 };

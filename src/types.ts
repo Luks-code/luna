@@ -46,6 +46,8 @@ export interface ConversationData {
 
 // Estado de la conversación
 export interface ConversationState {
+  pseudoComplaintHandling: boolean;
+  spamMetrics: any;
   isComplaintInProgress: boolean;
   complaintData: ComplaintData;
   currentStep: 'INIT' | 'COLLECTING_TYPE' | 'COLLECTING_DESCRIPTION' | 'COLLECTING_CITIZEN_DATA' | 'AWAITING_CONFIRMATION' | 'COMPLETE';
